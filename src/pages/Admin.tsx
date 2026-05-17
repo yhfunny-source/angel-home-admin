@@ -1,0 +1,823 @@
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { toast } from 'sonner';
+import { storage } from '@/lib/storage';
+import {
+  getUsers, getStaff, getWaiters, getStores,
+  createUser, createStaff, createWaiter, createStore,
+  updateUser, updateStaff, updateWaiter, updateStore,
+  deleteUser, deleteStaff, deleteWaiter, deleteStore,
+  formatMoney,
+} from '@/lib/api';
+import type { User, Staff, Waiter, Store, UserRole } from '@/types';
+import PasswordChangeDialog from '@/components/PasswordChangeDialog';
+
+const navSections = [
+  { title: '', items: [{ id: 'overview', label: '概览', icon: '\uD83D\uDCCA' }] },
+  { title: '组织权限', items: [{ id: 'users', label: '用户账号', icon: '\uD83D\uDC64' }, { id: 'roles', label: '角色权限', icon: '\uD83D\uDEE1\uFE0F' }] },
+  { title: '门店管理', items: [{ id: 'stores', label: '门店列表', icon: '\uD83C\uDFEA' }] },
+  { title: '人员管理', items: [{ id: 'staff', label: '员工档案', icon: '\uD83D\uDCAC' }, { id: 'waiters', label: '服务员档案', icon: '\uD83D\uDC54' }] },
+];
+
+const roleColors: Record<string, string> = {
+  'BOSS': 'bg-[#F5DCD6] text-[#8C3F30]',
+  '经理': 'bg-[#F7EEDB] text-[#A87F5F]',
+  '数据督导': 'bg-[#E5DCD0] text-[#A87F5F]',
+  '客服': 'bg-[#DDE5D8] text-[#3D4F3A]',
+  '派单侠': 'bg-[#E5DCD0] text-[#6B4A38]',
+};
+
+const roleOrder: UserRole[] = ['BOSS', '经理', '数据督导', '客服', '派单侠'];
+
+export default function Admin() {
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState('overview');
+  const [users, setUsers] = useState<User[]>([]);
+  const [staff, setStaff] = useState<Staff[]>([]);
+  const [waiters, setWaiters] = useState<Waiter[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const [showBindStaff, setShowBindStaff] = useState(false);
+  const [showStaffDetail, setShowStaffDetail] = useState(false);
+  const [formType, setFormType] = useState('');
+  const [editId, setEditId] = useState('');
+  const [formData, setFormData] = useState<Record<string, any>>({});
+  const [deleteTarget, setDeleteTarget] = useState({ type: '', id: '', name: '' });
+  const [bindStoreId, setBindStoreId] = useState('');
+  const [bindStoreName, setBindStoreName] = useState('');
+  const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+  const [selectedBindStaffId, setSelectedBindStaffId] = useState('');
+  const [detailStaff, setDetailStaff] = useState<Staff | null>(null);
+
+  const currentUser = JSON.parse(storage.get('user') || '{}');
+
+  const loadData = async () => {
+    try {
+      const [u, s, w, st] = await Promise.all([
+        getUsers().catch(() => []),
+        getStaff().catch(() => []),
+        getWaiters().catch(() => []),
+        getStores().catch(() => []),
+      ]);
+      setUsers(u); setStaff(s); setWaiters(w); setStores(st);
+    } catch { toast.error('数据加载失败'); }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadData(); }, []);
+
+  // Get users with customer role
+  const customerUsers = users.filter(u => (u.roles || []).includes('客服'));
+
+  const openBindStaff = (store: Store) => {
+    setBindStoreId(store.id);
+    setBindStoreName(store.name);
+    setSelectedBindStaffId(store.staffUserId || '');
+    setShowBindStaff(true);
+  };
+
+  const handleBindStaff = async () => {
+    if (!bindStoreId) return;
+    try {
+      await updateStore(bindStoreId, { staffUserId: selectedBindStaffId || undefined });
+      toast.success(selectedBindStaffId ? '客服绑定成功' : '已解除绑定');
+      setShowBindStaff(false);
+      loadData();
+    } catch (e: any) { toast.error(e.message || '绑定失败'); }
+  };
+
+  const getStoreBoundUser = (storeId: string) => {
+    const store = stores.find(s => s.id === storeId);
+    if (!store?.staffUserId) return null;
+    return users.find(u => u.id === store.staffUserId);
+  };
+
+  const openStaffDetail = (s: Staff) => { setDetailStaff(s); setShowStaffDetail(true); };
+
+  const openForm = (type: string, item?: any) => {
+    setFormType(type);
+    setEditId(item?.id || '');
+    if (type === 'user') {
+      setFormData({ username: item?.username || '', name: item?.name || '', roles: (item?.roles || ['客服']) as UserRole[], phone: item?.phone || '', password: '' });
+    } else if (type === 'staff') {
+      setFormData({
+        name: item?.name || '', realName: item?.realName || '', phone: item?.phone || '',
+        idCard: item?.idCard || '', gender: item?.gender || '女', age: item?.age ? String(item.age) : '',
+        homeAddress: item?.homeAddress || '', resume: item?.resume || '',
+        bankCard: item?.bankCard || '', emergencyContact: item?.emergencyContact || '',
+        emergencyPhone: item?.emergencyPhone || '', entryDate: item?.entryDate || '',
+        storeId: item?.storeId || '',
+      });
+    } else if (type === 'waiter') {
+      setFormData({ name: item?.name || '', phone: item?.phone || '', age: item?.age ? String(item.age) : '', height: item?.height || '', bodyType: item?.bodyType || '', cup: item?.cup || '', gender: item?.gender || '女', tags: (item?.tags || []).join(', '), storeId: item?.storeId || '' });
+    } else if (type === 'store') {
+      setFormData({ name: item?.name || '', address: item?.address || '', phone: item?.phone || '', rent: item?.rent ? String(item.rent) : '', commissionRate: item?.commissionRate ? String(item.commissionRate) : '', marketingFee: item?.marketingFee ? String(item.marketingFee) : '', operatingCost: item?.operatingCost ? String(item.operatingCost) : '' });
+    }
+    setShowForm(true);
+  };
+
+  const saveForm = async () => {
+    try {
+      if (formType === 'user') {
+        const data: any = { username: formData.username, name: formData.name, roles: formData.roles, phone: formData.phone, status: 'active' };
+        if (formData.password) data.password = formData.password;
+        else if (!editId) data.password = '123456'; // 新建时默认密码
+        editId ? await updateUser(editId, data) : await createUser(data);
+      } else if (formType === 'staff') {
+        const data: any = { name: formData.name, status: 'active' };
+        if (formData.realName) data.realName = formData.realName;
+        if (formData.phone) data.phone = formData.phone;
+        if (formData.idCard) data.idCard = formData.idCard;
+        if (formData.gender) data.gender = formData.gender;
+        if (formData.age) data.age = parseInt(formData.age);
+        if (formData.homeAddress) data.homeAddress = formData.homeAddress;
+        if (formData.resume) data.resume = formData.resume;
+        if (formData.bankCard) data.bankCard = formData.bankCard;
+        if (formData.emergencyContact) data.emergencyContact = formData.emergencyContact;
+        if (formData.emergencyPhone) data.emergencyPhone = formData.emergencyPhone;
+        if (formData.entryDate) data.entryDate = formData.entryDate;
+        if (formData.storeId) data.storeId = formData.storeId;
+        editId ? await updateStaff(editId, data) : await createStaff(data);
+      } else if (formType === 'waiter') {
+        const data: any = { name: formData.name, status: 'active' };
+        if (formData.phone) data.phone = formData.phone;
+        if (formData.age) data.age = parseInt(formData.age);
+        if (formData.height) data.height = formData.height;
+        if (formData.bodyType) data.bodyType = formData.bodyType;
+        if (formData.cup) data.cup = formData.cup;
+        if (formData.gender) data.gender = formData.gender;
+        if (formData.tags) data.tags = formData.tags.split(',').map((t: string) => t.trim()).filter(Boolean);
+        if (formData.storeId) data.storeId = formData.storeId;
+        data.rating = 0;
+        editId ? await updateWaiter(editId, data) : await createWaiter(data);
+      } else if (formType === 'store') {
+        const data = { name: formData.name, address: formData.address, phone: formData.phone, rent: parseFloat(formData.rent) || 0, commissionRate: parseFloat(formData.commissionRate) || 0, marketingFee: parseFloat(formData.marketingFee) || 0, operatingCost: parseFloat(formData.operatingCost) || 0, status: 'active' as const };
+        editId ? await updateStore(editId, data) : await createStore(data);
+      }
+      toast.success(editId ? '更新成功' : '创建成功');
+      setShowForm(false); loadData();
+    } catch (e: any) { toast.error(e.message || '保存失败'); }
+  };
+
+  const confirmDelete = (type: string, id: string, name: string) => { setDeleteTarget({ type, id, name }); setShowDelete(true); };
+
+  const handleDelete = async () => {
+    try {
+      const { type, id } = deleteTarget;
+      if (type === 'user') await deleteUser(id);
+      else if (type === 'staff') await deleteStaff(id);
+      else if (type === 'waiter') await deleteWaiter(id);
+      else if (type === 'store') await deleteStore(id);
+      toast.success('删除成功'); loadData();
+    } catch (e: any) { toast.error(e.message || '删除失败'); }
+    setShowDelete(false);
+  };
+
+  const filteredUsers = users.filter(u => !search || (u.name?.includes(search) || u.username?.includes(search)));
+  const filteredStaff = staff.filter(s => !search || (s.name?.includes(search) || s.realName?.includes(search)));
+  const filteredWaiters = waiters.filter(w => !search || w.name?.includes(search));
+  const filteredStores = stores.filter(s => !search || (s.name?.includes(search) || s.address?.includes(search)));
+
+  const roleStats = useMemo(() => {
+    const stats: Record<string, number> = {};
+    roleOrder.forEach(r => stats[r] = 0);
+    users.forEach(u => (u.roles || []).forEach(r => { if (stats[r] !== undefined) stats[r]++; }));
+    return stats;
+  }, [users]);
+
+  // KPI cards data
+  const kpiCards = useMemo(() => [
+    { label: '总订单', value: 0, icon: '\uD83D\uDCCB', color: 'bg-[#F0E8DF] text-[#B88F6F]' },
+    { label: '已完成', value: 0, icon: '\u2705', color: 'bg-[#EEF1EB] text-[#4A5E48]' },
+    { label: '总收入', value: formatMoney(0), icon: '\uD83D\uDCB0', color: 'bg-[#FFF8E6] text-[#B88F6F]' },
+    { label: '营业门店', value: stores.filter(s => s.status === 'active').length, icon: '\uD83C\uDFEA', color: 'bg-[#F0E8DF] text-[#7A5C48]' },
+    { label: '在岗服务员', value: waiters.filter(w => w.status === 'active').length, icon: '\uD83D\uDC54', color: 'bg-[#F0E8DF] text-[#A87F5F]' },
+  ], [stores, waiters]);
+
+  // Quick entry buttons
+  const quickEntries = [
+    { label: '添加用户', icon: '\uD83D\uDC64', action: () => openForm('user'), color: 'hover:bg-[#F0E8DF]' },
+    { label: '添加员工', icon: '\uD83D\uDCAC', action: () => openForm('staff'), color: 'hover:bg-[#EEF1EB]' },
+    { label: '添加服务员', icon: '\uD83D\uDC54', action: () => openForm('waiter'), color: 'hover:bg-[#F0E8DF]' },
+    { label: '添加门店', icon: '\uD83C\uDFEA', action: () => openForm('store'), color: 'hover:bg-[#F0E8DF]' },
+  ];
+
+  // customerUsers is already computed above
+
+  // ===== Render =====
+  return (
+    <div className="min-h-screen bg-[#FAF5F0] flex">
+      {/* Sidebar */}
+      <aside className="w-56 bg-slate-900 text-white flex-shrink-0 flex flex-col">
+        <div className="h-16 flex items-center px-5 border-b border-[#726255]">
+          <div className="w-8 h-8 bg-gradient-to-br from-[#C89F7F] to-[#B88F6F] rounded-lg flex items-center justify-center mr-3">
+            <span className="font-bold text-sm">A</span>
+          </div>
+          <div>
+            <h1 className="font-semibold text-sm">Angel Home</h1>
+            <p className="text-xs text-[#A08F80]">管理后台</p>
+          </div>
+        </div>
+        <nav className="flex-1 overflow-y-auto py-3">
+          {navSections.map(section => (
+            <div key={section.title || 'main'} className="mb-2">
+              {section.title ? <div className="px-5 py-2 text-xs font-medium text-[#A08F80] uppercase tracking-wider">{section.title}</div> : null}
+              {section.items.map(item => (
+                <button key={item.id} onClick={() => setActiveTab(item.id)}
+                  className={activeTab === item.id
+                    ? 'w-full flex items-center gap-3 px-5 py-2.5 text-sm transition-colors bg-[#FFF8E6]0/20 text-[#FBBF24] border-r-2 border-amber-400'
+                    : 'w-full flex items-center gap-3 px-5 py-2.5 text-sm transition-colors text-[#A08F80] hover:text-white hover:bg-[#4A3A2F]'}>
+                  <span className="text-base">{item.icon}</span>
+                  <span className="flex-1 text-left">{item.label}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+        </nav>
+        <div className="border-t border-[#726255] p-4">
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#C89F7F] to-[#B88F6F] flex items-center justify-center text-xs font-bold">{(currentUser?.name || 'A')[0]}</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">{currentUser?.name || '管理员'}</p>
+              <p className="text-xs text-[#A08F80] truncate">{(currentUser?.roles || []).join(', ')}</p>
+            </div>
+          </div>
+          <Button variant="outline" size="sm" className="w-full border-[#726255] text-[#A08F80] hover:text-white hover:bg-[#4A3A2F] mb-2" onClick={() => setShowPasswordDialog(true)}>
+            修改密码
+          </Button>
+          <Button variant="outline" size="sm" className="w-full border-[#726255] text-[#A08F80] hover:text-white hover:bg-[#4A3A2F]" onClick={() => { storage.clear(); navigate('/login'); }}>
+            退出登录
+          </Button>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 min-w-0 flex flex-col">
+        <header className="h-14  border-b border-[#E8DFD2] flex items-center px-6 justify-between">
+          <div className="flex items-center gap-3">
+            <Button variant="outline" size="sm" className="text-[#726255] border-[#E8DFD2]" onClick={() => navigate('/portal')}>
+              ← 返回
+            </Button>
+            <div className="flex items-center gap-2 text-sm text-[#A08F80]">
+              <span className="text-[#A08F80]">管理后台</span>
+              <span className="text-[#BBABA0]">/</span>
+              {navSections.flatMap(s => s.items).find(i => i.id === activeTab)?.label}
+            </div>
+          </div>
+          <Input placeholder="搜索..." value={search} onChange={e => setSearch(e.target.value)} className="w-48 h-8 text-sm" />
+        </header>
+
+        <div className="flex-1 overflow-auto p-6">
+          {loading ? (
+            <div className="flex items-center justify-center h-64">
+              <div className="w-8 h-8 border-4 border-[#C89F7F] border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
+            <div>
+              {/* ====== Overview ====== */}
+              {activeTab === 'overview' ? (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-5 gap-4">
+                    {kpiCards.map(card => (
+                      <div key={card.label} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-xs text-[#A08F80]">{card.label}</span>
+                          <span className={`w-8 h-8 rounded-lg ${card.color} flex items-center justify-center text-base`}>{card.icon}</span>
+                        </div>
+                        <p className="text-2xl font-bold text-[#4A3A2F]">{card.value}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="rounded-xl border border-[#E8DFD2] shadow-sm p-5">
+                    <h3 className="text-sm font-semibold text-[#4A3A2F] mb-4">快捷入口</h3>
+                    <div className="grid grid-cols-4 gap-3">
+                      {quickEntries.map(item => (
+                        <button key={item.label} onClick={item.action} className={`flex items-center gap-3 p-3 rounded-lg border border-[#E8DFD2] ${item.color} transition-colors text-left`}>
+                          <span className="text-xl">{item.icon}</span>
+                          <span className="text-sm text-[#4A3A2F]">{item.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-[#E8DFD2] shadow-sm p-5">
+                    <h3 className="text-sm font-semibold text-[#4A3A2F] mb-4">角色分布</h3>
+                    <div className="flex gap-4">
+                      {roleOrder.map(role => (
+                          <div key={role} className="flex-1 text-center p-4 rounded-lg bg-[#FAF5F0]">
+                            <p className="text-2xl font-bold text-[#4A3A2F]">{roleStats[role] || 0}</p>
+                            <Badge variant="outline" className={`mt-2 ${roleColors[role] || ''}`}>{role}</Badge>
+                          </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* ====== Users ====== */}
+              {activeTab === 'users' ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-[#4A3A2F]">用户账号</h2>
+                    <Button size="sm" onClick={() => openForm('user')} className="bg-[#FFF8E6]0 hover:bg-[#B88F6F]">+ 添加</Button>
+                  </div>
+                  <div className="rounded-xl border border-[#E8DFD2] shadow-sm overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-[#FAF5F0] text-[#726255]">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-medium">用户名</th>
+                          <th className="px-4 py-3 text-left font-medium">姓名</th>
+                          <th className="px-4 py-3 text-left font-medium">角色</th>
+                          <th className="px-4 py-3 text-left font-medium">手机</th>
+                          <th className="px-4 py-3 text-right font-medium">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredUsers.length === 0 ? (
+                          <tr><td colSpan={5} className="px-4 py-8 text-center text-[#A08F80]">暂无数据</td></tr>
+                        ) : filteredUsers.map(u => (
+                          <tr key={u.id} className="hover:bg-[#F5EFE6]">
+                            <td className="px-4 py-3 font-medium text-[#4A3A2F]">{u.username}</td>
+                            <td className="px-4 py-3">{u.name || '-'}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex gap-1 flex-wrap">
+                                {(u.roles || []).map(r => (
+                                  <Badge key={r} variant="outline" className={`text-xs ${roleColors[r] || ''}`}>{r}</Badge>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">{u.phone || '-'}</td>
+                            <td className="px-4 py-3 text-right">
+                              <button onClick={() => openForm('user', u)} className="text-[#B88F6F] hover:text-[#7A5C48] text-xs mr-3">编辑</button>
+                              <button onClick={() => confirmDelete('user', u.id, u.name || u.username)} className="text-[#B85C4A] hover:text-[#8C3F30] text-xs">删除</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* ====== Roles ====== */}
+              {activeTab === 'roles' ? (
+                <div className="space-y-4">
+                  <h2 className="text-lg font-semibold text-[#4A3A2F]">角色权限</h2>
+                  <div className="grid grid-cols-1 gap-4">
+                    {roleOrder.map(role => {
+                      const members = users.filter(u => (u.roles || []).includes(role));
+                      const noMembers = members.length === 0;
+                      return (
+                        <div key={role} className="rounded-xl border border-[#E8DFD2] shadow-sm p-5">
+                          <div className="flex items-center gap-3 mb-4">
+                            <Badge variant="outline" className={`text-sm px-3 py-1 ${roleColors[role]}`}>{role}</Badge>
+                            <span className="text-sm text-[#A08F80]">{members.length} 人</span>
+                          </div>
+                          {noMembers ? (
+                            <p className="text-sm text-[#A08F80] py-2">暂无成员</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-2">
+                              {members.map(m => (
+                                <div key={m.id} className="flex items-center gap-2 px-3 py-1.5 bg-[#FAF5F0] rounded-lg text-sm">
+                                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#C89F7F] to-[#B88F6F] flex items-center justify-center text-white text-xs font-bold">{(m.name || m.username)[0]}</div>
+                                  <span className="text-[#4A3A2F]">{m.name || m.username}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* ====== Stores ====== */}
+              {activeTab === 'stores' ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-[#4A3A2F]">门店列表</h2>
+                    <Button size="sm" onClick={() => openForm('store')} className="bg-[#FFF8E6]0 hover:bg-[#B88F6F]">+ 添加门店</Button>
+                  </div>
+                  <div className="rounded-xl border border-[#E8DFD2] shadow-sm overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-[#FAF5F0] text-[#726255]">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-medium">门店名称</th>
+                          <th className="px-4 py-3 text-left font-medium">地址</th>
+                          <th className="px-4 py-3 text-left font-medium">电话</th>
+                          <th className="px-4 py-3 text-left font-medium">关联客服</th>
+                          <th className="px-4 py-3 text-left font-medium">成本配置</th>
+                          <th className="px-4 py-3 text-right font-medium">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredStores.length === 0 ? (
+                          <tr><td colSpan={6} className="px-4 py-8 text-center text-[#A08F80]">暂无数据</td></tr>
+                        ) : filteredStores.map(s => {
+                          const boundUser = getStoreBoundUser(s.id);
+                          const btnClass = boundUser
+                            ? 'bg-[#DDE5D8] text-[#3D4F3A] hover:bg-green-200'
+                            : 'bg-[#E8DFD2] text-[#A08F80] hover:bg-[#E5DCD0] hover:text-[#B88F6F]';
+                          const btnText = boundUser ? `👤 ${boundUser.name || boundUser.username}` : '+ 绑定客服';
+                          return (
+                            <tr key={s.id} className="hover:bg-[#F5EFE6]">
+                              <td className="px-4 py-3 font-medium text-[#4A3A2F]">{s.name}</td>
+                              <td className="px-4 py-3 text-[#726255]">{s.address || '-'}</td>
+                              <td className="px-4 py-3">{s.phone || '-'}</td>
+                              <td className="px-4 py-3">
+                                <button onClick={() => openBindStaff(s)} className={`text-xs px-2.5 py-1 rounded-full transition-colors ${btnClass}`}>{btnText}</button>
+                              </td>
+                              <td className="px-4 py-3"><button onClick={() => openForm('store', s)} className="text-xs text-[#B88F6F] hover:underline">查看详情</button></td>
+                              <td className="px-4 py-3 text-right">
+                                <button onClick={() => openForm('store', s)} className="text-[#B88F6F] hover:text-[#7A5C48] text-xs mr-3">编辑</button>
+                                <button onClick={() => confirmDelete('store', s.id, s.name)} className="text-[#B85C4A] hover:text-[#8C3F30] text-xs">删除</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* ====== Staff (HR Records) ====== */}
+              {activeTab === 'staff' ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-[#4A3A2F]">员工档案（人事档案）</h2>
+                    <Button size="sm" onClick={() => openForm('staff')} className="bg-[#FFF8E6]0 hover:bg-[#B88F6F]">+ 添加员工</Button>
+                  </div>
+                  <div className="rounded-xl border border-[#E8DFD2] shadow-sm overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-[#FAF5F0] text-[#726255]">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-medium">花名/工号</th>
+                          <th className="px-4 py-3 text-left font-medium">真实姓名</th>
+                          <th className="px-4 py-3 text-left font-medium">性别</th>
+                          <th className="px-4 py-3 text-left font-medium">手机</th>
+                          <th className="px-4 py-3 text-left font-medium">归属门店</th>
+                          <th className="px-4 py-3 text-left font-medium">入职日期</th>
+                          <th className="px-4 py-3 text-right font-medium">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredStaff.length === 0 ? (
+                          <tr><td colSpan={7} className="px-4 py-8 text-center text-[#A08F80]">暂无数据</td></tr>
+                        ) : filteredStaff.map(s => {
+                          const primaryStore = stores.find(st => st.id === s.storeId);
+                          return (
+                            <tr key={s.id} className="hover:bg-[#F5EFE6]">
+                              <td className="px-4 py-3 font-medium text-[#4A3A2F]">{s.name}</td>
+                              <td className="px-4 py-3">{s.realName || '-'}</td>
+                              <td className="px-4 py-3">{s.gender || '-'}</td>
+                              <td className="px-4 py-3">{s.phone || '-'}</td>
+                              <td className="px-4 py-3">
+                                {primaryStore
+                                  ? <Badge variant="outline" className="text-xs bg-[#F0E8DF] text-[#6B4A38] border-[#D8CBC0]">{primaryStore.name}</Badge>
+                                  : <span className="text-xs text-[#A08F80]">未分配</span>}
+                              </td>
+                              <td className="px-4 py-3 text-[#A08F80]">{s.entryDate || '-'}</td>
+                              <td className="px-4 py-3 text-right">
+                                <button onClick={() => openStaffDetail(s)} className="text-[#B88F6F] hover:text-[#7A5C48] text-xs mr-3">👁️ 详情</button>
+                                <button onClick={() => openForm('staff', s)} className="text-[#B88F6F] hover:text-[#7A5C48] text-xs mr-3">编辑</button>
+                                <button onClick={() => confirmDelete('staff', s.id, s.name)} className="text-[#B85C4A] hover:text-[#8C3F30] text-xs">删除</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* ====== Waiters ====== */}
+              {activeTab === 'waiters' ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-[#4A3A2F]">服务员档案</h2>
+                    <Button size="sm" onClick={() => openForm('waiter')} className="bg-[#FFF8E6]0 hover:bg-[#B88F6F]">+ 添加</Button>
+                  </div>
+                  <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {filteredWaiters.length === 0 ? (
+                      <div className="col-span-full text-center py-12 text-[#A08F80]  rounded-xl border border-[#E8DFD2]">暂无服务员数据</div>
+                    ) : filteredWaiters.map(w => {
+                      const waiterStore = w.storeId ? stores.find(s => s.id === w.storeId) : null;
+                      const statusClass = w.status === 'active' ? 'bg-[#DDE5D8] text-[#3D4F3A]' : w.status === 'busy' ? 'bg-[#F7EEDB] text-[#A87F5F]' : 'bg-[#E8DFD2] text-[#726255]';
+                      const statusLabel = w.status === 'active' ? '在岗' : w.status === 'busy' ? '服务中' : '休息';
+                      return (
+                        <div key={w.id} className="rounded-xl border border-[#E8DFD2] shadow-sm p-4 hover:shadow-md transition-shadow">
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-pink-400 to-rose-500 flex items-center justify-center text-white font-bold">{w.name[0]}</div>
+                              <div>
+                                <h4 className="font-semibold text-[#4A3A2F]">{w.name}</h4>
+                                <p className="text-xs text-[#A08F80]">{w.phone || '无电话'}</p>
+                              </div>
+                            </div>
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${statusClass}`}>{statusLabel}</span>
+                          </div>
+                          <div className="space-y-1.5 text-xs text-[#726255] mb-3">
+                            {w.age ? <p><span className="text-[#A08F80]">年龄:</span> {w.age}岁</p> : null}
+                            {w.height ? <p><span className="text-[#A08F80]">身高:</span> {w.height}</p> : null}
+                            {w.bodyType ? <p><span className="text-[#A08F80]">身型:</span> {w.bodyType}</p> : null}
+                            {w.cup ? <p><span className="text-[#A08F80]">罩杯:</span> {w.cup}</p> : null}
+                            {w.gender ? <p><span className="text-[#A08F80]">性别:</span> {w.gender}</p> : null}
+                            {waiterStore ? <p><span className="text-[#A08F80]">门店:</span> {waiterStore.name}</p> : null}
+                          </div>
+                          {w.tags && w.tags.length > 0 ? (
+                            <div className="flex flex-wrap gap-1 mb-3">
+                              {w.tags.map(t => <Badge key={t} variant="outline" className="text-xs bg-[#F0E8DF] text-[#BE185D] border-[#FBCFE8]">{t}</Badge>)}
+                            </div>
+                          ) : null}
+                          <div className="flex items-center justify-between pt-3 border-t border-slate-50">
+                            <div className="flex items-center gap-1">
+                              <span className="text-[#C89F7F]">★</span>
+                              <span className="text-sm font-semibold">{typeof w.rating === 'number' ? w.rating.toFixed(1) : parseFloat(w.rating || '0').toFixed(1)}</span>
+                              <span className="text-xs text-[#A08F80]">({w.totalReviews || 0}评)</span>
+                            </div>
+                            <div className="flex gap-2">
+                              <button onClick={() => openForm('waiter', w)} className="text-[#B88F6F] hover:text-[#7A5C48] text-xs">编辑</button>
+                              <button onClick={() => confirmDelete('waiter', w.id, w.name)} className="text-[#B85C4A] hover:text-[#8C3F30] text-xs">删除</button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* ====== Staff Form (HR) ====== */}
+      {showForm && formType === 'staff' ? (
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowForm(false)}>
+          <div className="rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">{editId ? '编辑' : '添加'}员工档案</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-[#726255]">花名/工号 *</label>
+                  <Input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="如花名、工号" />
+                </div>
+                <div>
+                  <label className="text-sm text-[#726255]">真实姓名</label>
+                  <Input value={formData.realName || ''} onChange={e => setFormData({ ...formData, realName: e.target.value })} placeholder="真实姓名" />
+                </div>
+                <div>
+                  <label className="text-sm text-[#726255]">手机号</label>
+                  <Input value={formData.phone || ''} onChange={e => setFormData({ ...formData, phone: e.target.value })} placeholder="手机号" />
+                </div>
+                <div>
+                  <label className="text-sm text-[#726255]">身份证号</label>
+                  <Input value={formData.idCard || ''} onChange={e => setFormData({ ...formData, idCard: e.target.value })} placeholder="18位身份证号" />
+                </div>
+                <div>
+                  <label className="text-sm text-[#726255]">性别</label>
+                  <select value={formData.gender || '女'} onChange={e => setFormData({ ...formData, gender: e.target.value })} className="w-full h-10 rounded-md border border-[#E8DFD2] px-3 text-sm">
+                    <option value="女">女</option>
+                    <option value="男">男</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm text-[#726255]">年龄</label>
+                  <Input value={formData.age || ''} onChange={e => setFormData({ ...formData, age: e.target.value })} placeholder="年龄" type="number" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-sm text-[#726255]">家庭住址</label>
+                  <Input value={formData.homeAddress || ''} onChange={e => setFormData({ ...formData, homeAddress: e.target.value })} placeholder="家庭住址" />
+                </div>
+                <div>
+                  <label className="text-sm text-[#726255]">银行卡号</label>
+                  <Input value={formData.bankCard || ''} onChange={e => setFormData({ ...formData, bankCard: e.target.value })} placeholder="银行卡号" />
+                </div>
+                <div>
+                  <label className="text-sm text-[#726255]">入职日期</label>
+                  <Input value={formData.entryDate || ''} onChange={e => setFormData({ ...formData, entryDate: e.target.value })} placeholder="YYYY-MM-DD" type="date" />
+                </div>
+                <div>
+                  <label className="text-sm text-[#726255]">紧急联系人</label>
+                  <Input value={formData.emergencyContact || ''} onChange={e => setFormData({ ...formData, emergencyContact: e.target.value })} placeholder="紧急联系人姓名" />
+                </div>
+                <div>
+                  <label className="text-sm text-[#726255]">紧急联系人电话</label>
+                  <Input value={formData.emergencyPhone || ''} onChange={e => setFormData({ ...formData, emergencyPhone: e.target.value })} placeholder="紧急联系人电话" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-sm text-[#726255]">归属门店</label>
+                  <select value={formData.storeId || ''} onChange={e => setFormData({ ...formData, storeId: e.target.value })} className="w-full h-10 rounded-md border border-[#E8DFD2] px-3 text-sm">
+                    <option value="">不分配</option>
+                    {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="text-sm text-[#726255]">简历/备注</label>
+                  <textarea value={formData.resume || ''} onChange={e => setFormData({ ...formData, resume: e.target.value })} placeholder="工作经历、技能特长、备注..." className="w-full mt-1 p-3 border border-[#E8DFD2] rounded-lg text-sm min-h-[80px]" />
+                </div>
+              </div>
+              <div className="flex gap-3 mt-5">
+                <Button variant="outline" className="flex-1" onClick={() => setShowForm(false)}>取消</Button>
+                <Button className="flex-1 bg-[#FFF8E6]0 hover:bg-[#B88F6F]" onClick={saveForm}>保存</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ====== Other Forms ====== */}
+      {showForm && formType !== 'staff' ? (
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowForm(false)}>
+          <div className="rounded-2xl shadow-2xl max-w-md w-full max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">{editId ? '编辑' : '添加'}{formType === 'user' ? '用户' : formType === 'waiter' ? '服务员' : '门店'}</h3>
+              <div className="space-y-3">
+                {formType === 'user' ? (
+                  <>
+                    <div><label className="text-sm text-[#726255]">用户名</label><Input value={formData.username || ''} onChange={e => setFormData({ ...formData, username: e.target.value })} placeholder="登录用户名" /></div>
+                    <div><label className="text-sm text-[#726255]">姓名</label><Input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="真实姓名" /></div>
+                    <div><label className="text-sm text-[#726255]">手机</label><Input value={formData.phone || ''} onChange={e => setFormData({ ...formData, phone: e.target.value })} placeholder="手机号" /></div>
+                    <div>
+                      <label className="text-sm text-[#726255]">登录密码{editId ? '（留空则不修改）' : ''}</label>
+                      <Input type="password" value={formData.password || ''} onChange={e => setFormData({ ...formData, password: e.target.value })} placeholder={editId ? '不修改请留空' : '默认 123456'} />
+                    </div>
+                    <div>
+                      <label className="text-sm text-[#726255]">角色（可多选）</label>
+                      <div className="flex flex-wrap gap-2 mt-1">
+                        {roleOrder.map(role => {
+                          const roles = formData.roles || [];
+                          const isChecked = roles.includes(role);
+                          return (
+                            <label key={role} className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[#E8DFD2] cursor-pointer hover:bg-[#F5EFE6]">
+                              <input type="checkbox" checked={isChecked} onChange={e => {
+                                const newRoles = e.target.checked ? [...roles, role] : roles.filter((r: string) => r !== role);
+                                setFormData({ ...formData, roles: newRoles });
+                              }} className="rounded" />
+                              <span className="text-sm">{role}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                ) : formType === 'waiter' ? (
+                  <>
+                    <div><label className="text-sm text-[#726255]">姓名</label><Input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="姓名" /></div>
+                    <div><label className="text-sm text-[#726255]">手机</label><Input value={formData.phone || ''} onChange={e => setFormData({ ...formData, phone: e.target.value })} placeholder="手机号" /></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-sm text-[#726255]">性别</label>
+                        <select value={formData.gender || '女'} onChange={e => setFormData({ ...formData, gender: e.target.value })} className="w-full h-10 rounded-md border border-[#E8DFD2] px-3 text-sm">
+                          <option value="女">女</option>
+                          <option value="男">男</option>
+                        </select>
+                      </div>
+                      <div><label className="text-sm text-[#726255]">年龄</label><Input value={formData.age || ''} onChange={e => setFormData({ ...formData, age: e.target.value })} placeholder="年龄" /></div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div><label className="text-sm text-[#726255]">身高</label><Input value={formData.height || ''} onChange={e => setFormData({ ...formData, height: e.target.value })} placeholder="170cm" /></div>
+                      <div><label className="text-sm text-[#726255]">身型</label><Input value={formData.bodyType || ''} onChange={e => setFormData({ ...formData, bodyType: e.target.value })} placeholder="苗条" /></div>
+                      <div><label className="text-sm text-[#726255]">罩杯</label><Input value={formData.cup || ''} onChange={e => setFormData({ ...formData, cup: e.target.value })} placeholder="C" /></div>
+                    </div>
+                    <div>
+                      <label className="text-sm text-[#726255]">所属门店</label>
+                      <select value={formData.storeId || ''} onChange={e => setFormData({ ...formData, storeId: e.target.value })} className="w-full h-10 rounded-md border border-[#E8DFD2] px-3 text-sm">
+                        <option value="">请选择</option>
+                        {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    </div>
+                    <div><label className="text-sm text-[#726255]">标签</label><Input value={formData.tags || ''} onChange={e => setFormData({ ...formData, tags: e.target.value })} placeholder="专业,准时,热情" /></div>
+                  </>
+                ) : formType === 'store' ? (
+                  <>
+                    <div><label className="text-sm text-[#726255]">门店名称</label><Input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="名称" /></div>
+                    <div><label className="text-sm text-[#726255]">地址</label><Input value={formData.address || ''} onChange={e => setFormData({ ...formData, address: e.target.value })} placeholder="地址" /></div>
+                    <div><label className="text-sm text-[#726255]">电话</label><Input value={formData.phone || ''} onChange={e => setFormData({ ...formData, phone: e.target.value })} placeholder="电话" /></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div><label className="text-sm text-[#726255]">房租</label><Input value={formData.rent || ''} onChange={e => setFormData({ ...formData, rent: e.target.value })} placeholder="0" type="number" /></div>
+                      <div><label className="text-sm text-[#726255]">佣金比例(%)</label><Input value={formData.commissionRate || ''} onChange={e => setFormData({ ...formData, commissionRate: e.target.value })} placeholder="0" type="number" /></div>
+                      <div><label className="text-sm text-[#726255]">营销费用</label><Input value={formData.marketingFee || ''} onChange={e => setFormData({ ...formData, marketingFee: e.target.value })} placeholder="0" type="number" /></div>
+                      <div><label className="text-sm text-[#726255]">运营费用</label><Input value={formData.operatingCost || ''} onChange={e => setFormData({ ...formData, operatingCost: e.target.value })} placeholder="0" type="number" /></div>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+              <div className="flex gap-3 mt-5">
+                <Button variant="outline" className="flex-1" onClick={() => setShowForm(false)}>取消</Button>
+                <Button className="flex-1 bg-[#FFF8E6]0 hover:bg-[#B88F6F]" onClick={saveForm}>保存</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ====== Bind Staff Modal ====== */}
+      {showBindStaff ? (
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowBindStaff(false)}>
+          <div className="rounded-2xl shadow-2xl max-w-md w-full" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <h3 className="text-lg font-bold text-[#4A3A2F] mb-1">绑定客服</h3>
+              <p className="text-sm text-[#A08F80] mb-4">门店: <strong>{bindStoreName}</strong></p>
+              <div className="max-h-72 overflow-y-auto space-y-2">
+                <button onClick={() => setSelectedBindStaffId('')} className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-colors text-left ${!selectedBindStaffId ? 'border-[#C89F7F] bg-[#F0E8DF]' : 'border-[#E8DFD2] hover:bg-[#F5EFE6]'}`}>
+                  <div className="w-10 h-10 rounded-full bg-[#E8DFD2] flex items-center justify-center text-[#A08F80] text-sm">—</div>
+                  <div><p className="font-medium text-[#4A3A2F]">不绑定客服</p><p className="text-xs text-[#A08F80]">当前门店不关联任何客服</p></div>
+                  {!selectedBindStaffId ? <span className="text-[#C89F7F] ml-auto">✓</span> : null}
+                </button>
+                {customerUsers.length === 0 ? (
+                  <p className="text-center text-[#A08F80] py-4">用户组中没有角色为&quot;客服&quot;的用户，请先在&quot;用户账号&quot;中添加</p>
+                ) : customerUsers.map(u => (
+                  <button key={u.id} onClick={() => setSelectedBindStaffId(u.id)} className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-colors text-left ${selectedBindStaffId === u.id ? 'border-[#C89F7F] bg-[#F0E8DF]' : 'border-[#E8DFD2] hover:bg-[#F5EFE6]'}`}>
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-emerald-500 flex items-center justify-center text-white font-bold text-sm">{(u.name || u.username)[0]}</div>
+                    <div className="flex-1">
+                      <p className="font-medium text-[#4A3A2F]">{u.name || u.username} <Badge variant="outline" className="text-xs ml-1 bg-[#EEF1EB] text-[#3D4F3A]">客服</Badge></p>
+                      <p className="text-xs text-[#A08F80]">{u.phone || '无手机号'}</p>
+                    </div>
+                    {selectedBindStaffId === u.id ? <span className="text-[#C89F7F]">✓</span> : null}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-3 mt-4">
+                <Button variant="outline" className="flex-1" onClick={() => setShowBindStaff(false)}>取消</Button>
+                <Button className="flex-1 bg-[#F0E8DF]0 hover:bg-[#B88F6F]" onClick={handleBindStaff}>确认绑定</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ====== Staff Detail Modal ====== */}
+      {showStaffDetail && detailStaff ? (
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowStaffDetail(false)}>
+          <div className="rounded-2xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-[#4A3A2F]">客服人事档案</h3>
+                <button onClick={() => setShowStaffDetail(false)} className="text-[#A08F80] hover:text-[#726255]">✕</button>
+              </div>
+              <div className="space-y-3 text-sm">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">花名/工号</p><p className="font-medium">{detailStaff.name}</p></div>
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">真实姓名</p><p className="font-medium">{detailStaff.realName || '-'}</p></div>
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">性别</p><p className="font-medium">{detailStaff.gender || '-'}</p></div>
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">年龄</p><p className="font-medium">{detailStaff.age || '-'}</p></div>
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">手机号</p><p className="font-medium">{detailStaff.phone || '-'}</p></div>
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">身份证号</p><p className="font-medium">{detailStaff.idCard || '-'}</p></div>
+                </div>
+                <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">家庭住址</p><p className="font-medium">{detailStaff.homeAddress || '-'}</p></div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">银行卡号</p><p className="font-medium">{detailStaff.bankCard || '-'}</p></div>
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">入职日期</p><p className="font-medium">{detailStaff.entryDate || '-'}</p></div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">紧急联系人</p><p className="font-medium">{detailStaff.emergencyContact || '-'}</p></div>
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg"><p className="text-xs text-[#A08F80]">紧急联系人电话</p><p className="font-medium">{detailStaff.emergencyPhone || '-'}</p></div>
+                </div>
+                <div className="bg-[#FAF5F0] p-3 rounded-lg">
+                  <p className="text-xs text-[#A08F80] mb-1">归属门店</p>
+                  {stores.find(st => st.id === detailStaff.storeId)
+                    ? <Badge variant="outline" className="bg-[#F0E8DF] text-[#6B4A38] border-[#D8CBC0]">{stores.find(st => st.id === detailStaff.storeId)?.name}</Badge>
+                    : <span className="text-[#A08F80]">未分配</span>}
+                </div>
+                {detailStaff.resume ? (
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg">
+                    <p className="text-xs text-[#A08F80] mb-1">简历/备注</p>
+                    <p className="text-[#4A3A2F] whitespace-pre-wrap">{detailStaff.resume}</p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ====== Delete Confirm ====== */}
+      {showDelete ? (
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowDelete(false)}>
+          <div className="rounded-2xl shadow-2xl max-w-sm w-full" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <h3 className="text-lg font-bold text-[#A34E3C] mb-2">确认删除</h3>
+              <p className="text-sm text-[#726255] mb-4">确定要删除 <strong>{deleteTarget.name}</strong> 吗？此操作不可恢复。</p>
+              <div className="flex gap-3">
+                <Button variant="outline" className="flex-1" onClick={() => setShowDelete(false)}>取消</Button>
+                <Button variant="destructive" className="flex-1" onClick={handleDelete}>确认删除</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showPasswordDialog ? <PasswordChangeDialog userId={currentUser?.id || ''} onClose={() => setShowPasswordDialog(false)} /> : null}
+    </div>
+  );
+}
