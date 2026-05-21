@@ -196,6 +196,8 @@ async function initDatabase() {
         customer_reject_note TEXT,
         reject_at DATETIME,
         follow_up_action ENUM('reassign','fail'),
+       customer_type ENUM('old','new'),
+       history_count INT DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_status (status),
@@ -312,6 +314,12 @@ async function initDatabase() {
         INDEX idx_order (order_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
+
+    // 兼容升级：给已有表添加新字段
+    try {
+      await conn.execute('ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_type ENUM("old","new")');
+      await conn.execute('ALTER TABLE orders ADD COLUMN IF NOT EXISTS history_count INT DEFAULT 1');
+    } catch (e) { /* 字段已存在会报错，忽略 */ }
 
     console.log('[DB] All tables initialized');
   } finally {
@@ -639,6 +647,8 @@ app.get('/api/orders', authMiddleware, async (req, res) => {
       const o = camelizeRow(r);
       o.supplements = r.supplements ? JSON.parse(r.supplements) : [];
       o.preferences = r.preferences ? JSON.parse(r.preferences) : [];
+      o.customerType = r.customer_type;
+      o.historyCount = r.history_count;
       return o;
     });
     res.json(success(orders));
@@ -655,6 +665,8 @@ app.get('/api/orders/:id', authMiddleware, async (req, res) => {
     const o = camelizeRow(rows[0]);
     o.supplements = rows[0].supplements ? JSON.parse(rows[0].supplements) : [];
     o.preferences = rows[0].preferences ? JSON.parse(rows[0].preferences) : [];
+    o.customerType = rows[0].customer_type;
+    o.historyCount = rows[0].history_count;
     res.json(success(o));
   } catch (err) {
     res.status(500).json(error(err.message));
@@ -663,28 +675,86 @@ app.get('/api/orders/:id', authMiddleware, async (req, res) => {
 
 app.post('/api/orders', authMiddleware, async (req, res) => {
   try {
-    // 使用前端传的自定义订单号（id 字段）作为主键
     const id = req.body.id || generateId();
     const {
       orderNo, customerName, phone, wechat, qq, address, location,
       preferences, notes, infoFee, prepayAmount, status,
       storeId, storeName, staffId, staffName, submitterId, submittedBy, referencePhoto
     } = req.body;
-    // 如果前端没传 orderNo 但传了 id，用 id 作为 order_no
     const finalOrderNo = orderNo || req.body.id || null;
+
+    // ========== 三要素客户匹配 ==========
+    let customerId = null;
+    let isOldCustomer = false;
+    let matchedCustomer = null;
+
+    if (phone || wechat || qq) {
+      const conditions = [];
+      const params = [];
+      if (phone) { conditions.push('phone = ?'); params.push(phone); }
+      if (wechat) { conditions.push('wechat = ?'); params.push(wechat); }
+      if (qq) { conditions.push('qq = ?'); params.push(qq); }
+
+      const [matched] = await pool.execute(
+        `SELECT * FROM customers WHERE (${conditions.join(' OR ')}) AND status = 'active' LIMIT 1`,
+        params
+      );
+
+      if (matched.length > 0) {
+        // 老客户 - 更新
+        matchedCustomer = matched[0];
+        customerId = matchedCustomer.id;
+        isOldCustomer = true;
+        await pool.execute(
+          'UPDATE customers SET order_count = order_count + 1, last_contact_date = ? WHERE id = ?',
+          [nowBeijing(), customerId]
+        );
+      } else {
+        // 新客户 - 创建客户资产
+        customerId = generateId();
+        await pool.execute(
+          `INSERT INTO customers (id, name, phone, wechat, qq, source_store_id, source_store_name, source_cs_id, source_cs_name, order_count, total_spend, first_contact_date, last_contact_date, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, 'active')`,
+          [customerId, customerName || null, phone || null, wechat || null, qq || null,
+           storeId || null, storeName || null, submitterId || req.userId, submittedBy || null,
+           nowBeijing(), nowBeijing()]
+        );
+      }
+    }
+
+    // ========== 创建订单 ==========
     await pool.execute(
       `INSERT INTO orders (id, order_no, customer_name, phone, wechat, qq, address, location,
        preferences, notes, info_fee, prepay_amount, status, store_id, store_name,
-       staff_id, staff_name, submitter_id, submitted_by, reference_photo, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+       staff_id, staff_name, submitter_id, submitted_by, reference_photo, customer_type, history_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [id, finalOrderNo, customerName || null, phone || null, wechat || null, qq || null,
        address, location || null,
        preferences ? JSON.stringify(preferences) : null,
        notes || null, infoFee || 0, prepayAmount || 0, status || 'pending',
        storeId || null, storeName || null, staffId || null, staffName || null,
-       submitterId || req.userId, submittedBy || null, referencePhoto || null]
+       submitterId || req.userId, submittedBy || null, referencePhoto || null,
+       isOldCustomer ? 'old' : 'new', matchedCustomer ? (matchedCustomer.order_count + 1) : 1]
     );
-    res.json(success({ id, orderNo: finalOrderNo }));
+
+    // ========== 记录客户服务 ==========
+    if (customerId) {
+      await pool.execute(
+        `INSERT INTO customer_services (id, customer_id, order_id, service_date, store_id, store_name, cs_id, cs_name, info_fee, customer_type, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [generateId(), customerId, id, nowBeijing(), storeId || null, storeName || null,
+         submitterId || req.userId, submittedBy || null, infoFee || 0, isOldCustomer ? 'old' : 'new']
+      );
+    }
+
+    res.json(success({
+      id,
+      orderNo: finalOrderNo,
+      customerId,
+      isOldCustomer,
+      customerName: matchedCustomer?.name || customerName || null,
+      historyCount: matchedCustomer ? (matchedCustomer.order_count + 1) : 1
+    }));
   } catch (err) {
     console.error('[ORDER CREATE ERROR]', err);
     res.status(500).json(error('创建订单失败: ' + err.message));
@@ -1175,10 +1245,4 @@ app.listen(PORT, async () => {
   console.log(`[API] Server running on port ${PORT}`);
   try {
     await initDatabase();
-    console.log('[API] Database initialized');
-  } catch (err) {
-    console.error('[API] DB init error:', err);
-  }
-});
-
-module.exports = app;
+    console.l

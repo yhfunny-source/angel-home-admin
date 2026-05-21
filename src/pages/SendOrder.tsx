@@ -487,6 +487,17 @@ export default function SendOrder() {
                               {order.storeName}
                             </Badge>
                           )}
+                          {/* 老客户/新客户标记 */}
+                          {order.customerType === 'old' && (
+                            <Badge variant="outline" className="text-xs bg-[#FFF1E3] text-[#A87F5F] border-[#F7EEDB]">
+                              🔥 回头客{order.historyCount && order.historyCount > 1 ? `·${order.historyCount}次` : ''}
+                            </Badge>
+                          )}
+                          {order.customerType === 'new' && (
+                            <Badge variant="outline" className="text-xs bg-[#EEF1EB] text-[#5C7258] border-[#D8CBC0]">
+                              🆕 新客户
+                            </Badge>
+                          )}
                           {reviewedOrders.has(order.id) && (
                             <Badge variant="outline" className="text-xs bg-[#E8DFD2] text-[#A08F80]">已评价</Badge>
                           )}
@@ -581,6 +592,12 @@ export default function SendOrder() {
                           {order.storeName && (
                             <Badge variant="outline" className="text-xs bg-[#E8E4DF] text-[#8A7E74] border-[#D8D0C8]">
                               {order.storeName}
+                            </Badge>
+                          )}
+                          {/* 老客户标记（即使是别人的单也显示） */}
+                          {order.customerType === 'old' && (
+                            <Badge variant="outline" className="text-xs bg-[#FFF1E3] text-[#A87F5F] border-[#F7EEDB]">
+                              🔥 回头客
                             </Badge>
                           )}
                           {/* 归属标识 */}

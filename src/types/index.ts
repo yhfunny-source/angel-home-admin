@@ -104,6 +104,7 @@ export interface OrderSupplement {
 
 export interface Order {
   id: string;
+  orderNo?: string;
   customerName?: string;
   phone?: string;
   wechat?: string;
@@ -136,6 +137,8 @@ export interface Order {
   customerRejectNote?: string;    // 客人其他备注
   rejectAt?: string;              // 被退时间
   followUpAction?: 'reassign' | 'fail'; // 客服跟进：reassign=换人, fail=彻底失败
+  customerType?: 'old' | 'new'; // 客户类型：老客户/新客户（通过三要素匹配）
+  historyCount?: number; // 历史消费次数
   createdAt: string;
   updatedAt?: string;
 }

@@ -6,20 +6,21 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { storage } from '@/lib/storage';
 import {
-  getUsers, getStaff, getWaiters, getStores,
+  getUsers, getStaff, getWaiters, getStores, getOrders,
   createUser, createStaff, createWaiter, createStore,
   updateUser, updateStaff, updateWaiter, updateStore,
   deleteUser, deleteStaff, deleteWaiter, deleteStore,
-  formatMoney,
+  formatMoney, formatDateTime,
 } from '@/lib/api';
-import type { User, Staff, Waiter, Store, UserRole, DailyRecord } from '@/types';
+import type { User, Staff, Waiter, Store, Order, UserRole, DailyRecord } from '@/types';
 import PasswordChangeDialog from '@/components/PasswordChangeDialog';
 import { getAllDailyRecords } from '@/lib/api';
+import DailyRanking from '@/components/DailyRanking';
 
 const navSections = [
   { title: '', items: [{ id: 'overview', label: '概览', icon: '\uD83D\uDCCA' }] },
+  { title: '业务数据', items: [{ id: 'orders', label: '订单管理', icon: '\uD83D\uDCCB' }, { id: 'checkin', label: '打卡记录', icon: '\uD83D\uDCC5' }] },
   { title: '客户资产', items: [{ id: 'customers', label: '客户资产库', icon: '\uD83D\uDC65' }] },
-  { title: '业务数据', items: [{ id: 'checkin', label: '打卡记录', icon: '\uD83D\uDCC5' }] },
   { title: '组织权限', items: [{ id: 'users', label: '用户账号', icon: '\uD83D\uDC64' }, { id: 'roles', label: '角色权限', icon: '\uD83D\uDEE1\uFE0F' }] },
   { title: '门店管理', items: [{ id: 'stores', label: '门店列表', icon: '\uD83C\uDFEA' }] },
   { title: '人员管理', items: [{ id: 'staff', label: '员工档案', icon: '\uD83D\uDCAC' }, { id: 'waiters', label: '服务员档案', icon: '\uD83D\uDC54' }] },
@@ -42,6 +43,7 @@ export default function Admin() {
   const [staff, setStaff] = useState<Staff[]>([]);
   const [waiters, setWaiters] = useState<Waiter[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -61,18 +63,20 @@ export default function Admin() {
   const [checkinRecords, setCheckinRecords] = useState<DailyRecord[]>([]);
   const [checkinLoading, setCheckinLoading] = useState(false);
   const [checkinFilter, setCheckinFilter] = useState({ startDate: '', endDate: '', csName: '' });
+  const [orderFilter, setOrderFilter] = useState({ status: '', search: '' });
 
   const currentUser = JSON.parse(storage.get('user') || '{}');
 
   const loadData = async () => {
     try {
-      const [u, s, w, st] = await Promise.all([
+      const [u, s, w, st, o] = await Promise.all([
         getUsers().catch(() => []),
         getStaff().catch(() => []),
         getWaiters().catch(() => []),
         getStores().catch(() => []),
+        getOrders().catch(() => []),
       ]);
-      setUsers(u); setStaff(s); setWaiters(w); setStores(st);
+      setUsers(u); setStaff(s); setWaiters(w); setStores(st); setOrders(o);
     } catch { toast.error('数据加载失败'); }
     setLoading(false);
   };
@@ -240,14 +244,16 @@ export default function Admin() {
     return stats;
   }, [users]);
 
-  // KPI cards data
+  // KPI cards data - 使用真实订单数据
+  const completedOrders = orders.filter(o => o.status === 'completed' || o.status === 'rated');
+  const totalRevenue = completedOrders.reduce((sum, o) => sum + (o.infoFee || 0), 0);
   const kpiCards = useMemo(() => [
-    { label: '总订单', value: 0, icon: '\uD83D\uDCCB', color: 'bg-[#F0E8DF] text-[#B88F6F]' },
-    { label: '已完成', value: 0, icon: '\u2705', color: 'bg-[#EEF1EB] text-[#4A5E48]' },
-    { label: '总收入', value: formatMoney(0), icon: '\uD83D\uDCB0', color: 'bg-[#FFF8E6] text-[#B88F6F]' },
+    { label: '总订单', value: orders.length, icon: '\uD83D\uDCCB', color: 'bg-[#F0E8DF] text-[#B88F6F]' },
+    { label: '已完成', value: completedOrders.length, icon: '\u2705', color: 'bg-[#EEF1EB] text-[#4A5E48]' },
+    { label: '总收入', value: formatMoney(totalRevenue), icon: '\uD83D\uDCB0', color: 'bg-[#FFF8E6] text-[#B88F6F]' },
     { label: '营业门店', value: stores.filter(s => s.status === 'active').length, icon: '\uD83C\uDFEA', color: 'bg-[#F0E8DF] text-[#7A5C48]' },
     { label: '空闲服务员', value: waiters.filter(w => w.status === 'active').length, icon: '\uD83D\uDC54', color: 'bg-[#F0E8DF] text-[#A87F5F]' },
-  ], [stores, waiters]);
+  ], [stores, waiters, orders, completedOrders, totalRevenue]);
 
   // Quick entry buttons
   const quickEntries = [
@@ -368,6 +374,9 @@ export default function Admin() {
                       ))}
                     </div>
                   </div>
+
+                  {/* 派单排名 */}
+                  <DailyRanking orders={orders} />
 
                   <div className="bg-[#FFFFFF] rounded-xl border border-[#E8DFD2] shadow-sm p-4 sm:p-5">
                     <h3 className="text-sm font-semibold text-[#4A3A2F] mb-3 sm:mb-4">角色分布</h3>
@@ -631,6 +640,74 @@ export default function Admin() {
                       );
                     })}
                   </div>
+                </div>
+              ) : null}
+
+              {/* ====== Orders ====== */}
+              {activeTab === 'orders' ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-[#4A3A2F]">订单管理</h2>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={orderFilter.status}
+                        onChange={e => setOrderFilter({ ...orderFilter, status: e.target.value })}
+                        className="h-8 text-xs px-2 rounded-lg border border-[#E8DFD2] bg-[#FFFFFF]"
+                      >
+                        <option value="">全部状态</option>
+                        <option value="pending">待派单</option>
+                        <option value="assigned">已派单</option>
+                        <option value="departed">已出发</option>
+                        <option value="arrived">已到达</option>
+                        <option value="serving">服务中</option>
+                        <option value="completed">已完成</option>
+                        <option value="rejected">被退</option>
+                        <option value="cancelled">彻底失败</option>
+                      </select>
+                    </div>
+                  </div>
+                  {orders.length === 0 ? (
+                    <div className="text-center py-12 text-[#A08F80] rounded-xl border border-[#E8DFD2] bg-[#FFFFFF]">暂无订单</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {orders.filter(o => !orderFilter.status || o.status === orderFilter.status).map(order => (
+                        <div key={order.id} className="bg-[#FFFFFF] rounded-xl border border-[#E8DFD2] shadow-sm p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-xs font-bold text-[#C89F7F]">#{order.orderNo || order.id?.slice(-6)}</span>
+                              <Badge variant="outline" className={
+                                order.status === 'pending' ? 'bg-[#E8DFD2] text-[#726255]' :
+                                order.status === 'assigned' ? 'bg-[#E5DCD0] text-[#A87F5F]' :
+                                order.status === 'departed' ? 'bg-[#E8EDF5] text-[#5C7295]' :
+                                order.status === 'arrived' ? 'bg-[#EDE8F5] text-[#7A6FA8]' :
+                                order.status === 'serving' ? 'bg-[#F7EEDB] text-[#A87F5F]' :
+                                order.status === 'completed' || order.status === 'rated' ? 'bg-[#DDE5D8] text-[#3D4F3A]' :
+                                'bg-[#F5DCD6] text-[#8C3F30]'
+                              }>
+                                {order.status === 'pending' ? '待派单' : order.status === 'assigned' ? '已派单' : order.status === 'departed' ? '已出发' : order.status === 'arrived' ? '已到达' : order.status === 'serving' ? '服务中' : order.status === 'completed' || order.status === 'rated' ? '已完成' : order.status === 'rejected' ? '被退' : '彻底失败'}
+                              </Badge>
+                              {order.storeName && <Badge variant="outline" className="text-xs bg-[#F0E8DF] text-[#6B4A38] border-[#D8CBC0]">{order.storeName}</Badge>}
+                              {/* 老客户标记 */}
+                              {(() => {
+                                const hasHistory = order.phone || order.wechat || order.qq;
+                                return hasHistory ? <Badge variant="outline" className="text-xs bg-[#EEF1EB] text-[#5C7258] border-[#D8CBC0]">可匹配</Badge> : null;
+                              })()}
+                            </div>
+                            <span className="text-xs text-[#A08F80]">{formatDateTime(order.createdAt)}</span>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+                            <div><span className="text-[#A08F80]">客户:</span> <span className="font-medium">{order.customerName || '匿名'}</span></div>
+                            <div><span className="text-[#A08F80]">手机:</span> {order.phone || '-'}</div>
+                            <div><span className="text-[#A08F80]">客服:</span> {order.submittedBy || order.staffName || '-'}</div>
+                            <div><span className="text-[#A08F80]">派单侠:</span> {order.dispatcherName || '-'}</div>
+                          </div>
+                          <div className="mt-1 text-sm"><span className="text-[#A08F80]">地址:</span> <span className="text-[#726255]">{order.address}</span></div>
+                          {order.waiterName && <div className="text-sm"><span className="text-[#A08F80]">服务员:</span> {order.waiterName}</div>}
+                          <div className="mt-1 text-sm font-medium text-[#A87F5F]">信息费: ¥{order.infoFee || 0}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ) : null}
 
