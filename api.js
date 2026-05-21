@@ -663,28 +663,31 @@ app.get('/api/orders/:id', authMiddleware, async (req, res) => {
 
 app.post('/api/orders', authMiddleware, async (req, res) => {
   try {
-    const id = generateId();
+    // 使用前端传的自定义订单号（id 字段）作为主键
+    const id = req.body.id || generateId();
     const {
       orderNo, customerName, phone, wechat, qq, address, location,
       preferences, notes, infoFee, prepayAmount, status,
-      storeId, storeName, staffId, staffName, submitterId, submittedBy
+      storeId, storeName, staffId, staffName, submitterId, submittedBy, referencePhoto
     } = req.body;
+    // 如果前端没传 orderNo 但传了 id，用 id 作为 order_no
+    const finalOrderNo = orderNo || req.body.id || null;
     await pool.execute(
       `INSERT INTO orders (id, order_no, customer_name, phone, wechat, qq, address, location,
        preferences, notes, info_fee, prepay_amount, status, store_id, store_name,
-       staff_id, staff_name, submitter_id, submitted_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [id, orderNo || null, customerName || null, phone || null, wechat || null, qq || null,
+       staff_id, staff_name, submitter_id, submitted_by, reference_photo, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [id, finalOrderNo, customerName || null, phone || null, wechat || null, qq || null,
        address, location || null,
        preferences ? JSON.stringify(preferences) : null,
        notes || null, infoFee || 0, prepayAmount || 0, status || 'pending',
        storeId || null, storeName || null, staffId || null, staffName || null,
-       submitterId || req.userId, submittedBy || null]
+       submitterId || req.userId, submittedBy || null, referencePhoto || null]
     );
-    res.json(success({ id, orderNo }));
+    res.json(success({ id, orderNo: finalOrderNo }));
   } catch (err) {
     console.error('[ORDER CREATE ERROR]', err);
-    res.status(500).json(error(err.message));
+    res.status(500).json(error('创建订单失败: ' + err.message));
   }
 });
 
