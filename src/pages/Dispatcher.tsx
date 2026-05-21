@@ -312,12 +312,16 @@ export default function Dispatcher() {
   };
 
   const handleReview = async () => {
-    if (!selectedOrder?.waiterId) return;
+    if (!selectedOrder?.waiterId) {
+      toast.error('订单未绑定服务员，无法评价');
+      return;
+    }
     try {
+      const waiter = waiters.find(w => w.id === selectedOrder.waiterId);
       await createReview({
-        id: generateId(),
         orderId: selectedOrder.id,
         waiterId: selectedOrder.waiterId,
+        waiterName: waiter?.name || selectedOrder.waiterName || undefined,
         reviewerId: user?.id,
         reviewerRole: '派单侠',
         rating: reviewRating,
@@ -329,7 +333,8 @@ export default function Dispatcher() {
       setReviewedOrders(prev => new Set(prev).add(selectedOrder.id));
       loadData();
     } catch (e: any) {
-      toast.error(e.message || '评价失败');
+      console.error('[Review Error]', e);
+      toast.error('评价失败: ' + (e.message || '未知错误'));
     }
   };
 

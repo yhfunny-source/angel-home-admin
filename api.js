@@ -846,26 +846,37 @@ app.get('/api/orders/:id/supplements', authMiddleware, async (req, res) => {
 app.post('/api/waiter-reviews', authMiddleware, async (req, res) => {
   try {
     const { orderId, waiterId, waiterName, reviewerId, reviewerRole, rating, tags, comment } = req.body;
+    // 参数校验
+    if (!orderId || !waiterId) {
+      return res.status(400).json(error('缺少订单ID或服务员ID'));
+    }
     const id = generateId();
     await pool.execute(
       'INSERT INTO waiter_reviews (id, order_id, waiter_id, waiter_name, reviewer_id, reviewer_role, rating, tags, comment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [id, orderId, waiterId, waiterName || null, reviewerId || req.userId, reviewerRole || null,
-       rating || 5, JSON.stringify(tags || []), comment || null]
+       rating !== undefined ? rating : 5, JSON.stringify(tags || []), comment || null]
     );
     // 更新服务员评分
     const [avgRows] = await pool.execute(
       'SELECT AVG(rating) as avg_rating, COUNT(*) as total FROM waiter_reviews WHERE waiter_id = ?',
       [waiterId]
     );
-    if (avgRows.length > 0) {
+    if (avgRows.length > 0 && avgRows[0].avg_rating !== null) {
+      const avgRating = parseFloat(avgRows[0].avg_rating) || 0;
       await pool.execute(
         'UPDATE waiters SET rating = ?, total_reviews = ? WHERE id = ?',
-        [parseFloat(avgRows[0].avg_rating).toFixed(2), avgRows[0].total, waiterId]
+        [avgRating.toFixed(2), avgRows[0].total || 0, waiterId]
       );
     }
+    // 更新订单状态为已评价
+    await pool.execute(
+      'UPDATE orders SET status = "rated" WHERE id = ?',
+      [orderId]
+    );
     res.json(success({ id }));
   } catch (err) {
-    res.status(500).json(error(err.message));
+    console.error('[REVIEW CREATE ERROR]', err);
+    res.status(500).json(error('评价提交失败: ' + err.message));
   }
 });
 
