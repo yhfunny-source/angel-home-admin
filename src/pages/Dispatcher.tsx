@@ -7,11 +7,11 @@ import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { storage } from '@/lib/storage';
 import {
-  getOrders, getWaiters,
+  getOrders, getWaiters, updateWaiter,
   updateOrder, createReview, getReviews,
-  formatDateTime, generateId, searchCustomers, addCustomerService,
+  formatDateTime, generateId, searchCustomers, addCustomerService, getCustomerDetail,
 } from '@/lib/api';
-import type { Order, Waiter, OrderStatus, Customer } from '@/types';
+import type { Order, Waiter, OrderStatus, Customer, CustomerService } from '@/types';
 import PasswordChangeDialog from '@/components/PasswordChangeDialog';
 
 const statusLabels: Record<string, string> = {
@@ -161,7 +161,7 @@ export default function Dispatcher() {
     setAssignWaiterId('');
     setCustomerHistory(null);
     setShowAssign(true);
-    // 搜索客户历史消费
+    // 搜索客户历史消费和服务记录
     if (order.phone || order.wechat || order.qq) {
       setLoadingHistory(true);
       try {
@@ -171,7 +171,13 @@ export default function Dispatcher() {
         else if (order.qq) params.qq = order.qq;
         const results = await searchCustomers(params);
         if (results && results.length > 0) {
-          setCustomerHistory(results[0]);
+          // 获取完整的客户详情（包含历史服务记录和服务员）
+          try {
+            const detail = await getCustomerDetail(results[0].id);
+            setCustomerHistory(detail);
+          } catch (e) {
+            setCustomerHistory(results[0]);
+          }
         }
       } catch (e) {
         console.log('客户搜索失败:', e);
@@ -185,6 +191,7 @@ export default function Dispatcher() {
     if (!selectedOrder || !assignWaiterId) return;
     try {
       const waiter = waiters.find(w => w.id === assignWaiterId);
+      // 1. 更新订单状态
       await updateOrder(selectedOrder.id, {
         status: 'assigned',
         waiterId: assignWaiterId,
@@ -192,6 +199,8 @@ export default function Dispatcher() {
         dispatcherId: user?.id,
         dispatcherName: user?.name || user?.username,
       });
+      // 2. 更新服务员状态为忙碌
+      await updateWaiter(assignWaiterId, { status: 'busy' });
       toast.success('派单成功，服务员已标记为忙碌');
       setShowAssign(false);
       setAssignWaiterId('');
@@ -244,7 +253,11 @@ export default function Dispatcher() {
         rejectNote,
         rejectAt: new Date().toISOString(),
       });
-      toast.success('订单已标记为被退，已通知客服跟进');
+      // 释放服务员
+      if (selectedOrder.waiterId) {
+        await updateWaiter(selectedOrder.waiterId, { status: 'active' });
+      }
+      toast.success('订单已标记为被退，服务员已释放');
       setShowReject(false);
       loadData();
     } catch (e: any) {
@@ -261,12 +274,17 @@ export default function Dispatcher() {
       return;
     }
     try {
+      // 1. 更新订单状态
       await updateOrder(selectedOrder.id, {
         status: 'completed',
         infoFee: fee,
         completionNote: completionNote || undefined,
       });
-      // 同步客户资产 - 记录服务数据
+      // 2. 释放服务员为空闲
+      if (selectedOrder.waiterId) {
+        await updateWaiter(selectedOrder.waiterId, { status: 'active' });
+      }
+      // 3. 同步客户资产 - 记录服务数据
       try {
         await addCustomerService({
           customerId: customerHistory?.id || generateId(),
@@ -575,6 +593,35 @@ export default function Dispatcher() {
                   </div>
                   {customerHistory.totalSpend > 0 && (
                     <p className="text-xs text-[#94724A]">累计消费: ¥{customerHistory.totalSpend.toFixed(0)}</p>
+                  )}
+                  {/* 历史服务过的服务员 - 避免重复派单 */}
+                  {(customerHistory as any)?.services && ((customerHistory as any).services as CustomerService[]).length > 0 && (
+                    <div className="mt-2 p-2 bg-[#F5DCD6]/30 rounded border border-[#F5DCD6]">
+                      <p className="text-xs text-[#B85C4A] font-medium mb-1">⚠️ 历史服务过的服务员（请勿重复派单）</p>
+                      <div className="flex flex-wrap gap-1">
+                        {(() => {
+                          const services = (customerHistory as any).services as CustomerService[];
+                          const uniqueWaiters = new Map<string, { name: string; count: number; dates: string[] }>();
+                          services.forEach((svc: CustomerService) => {
+                            if (svc.waiterName) {
+                              const key = svc.waiterName;
+                              const existing = uniqueWaiters.get(key);
+                              if (existing) {
+                                existing.count += 1;
+                                if (svc.serviceDate) existing.dates.push(svc.serviceDate);
+                              } else {
+                                uniqueWaiters.set(key, { name: svc.waiterName, count: 1, dates: svc.serviceDate ? [svc.serviceDate] : [] });
+                              }
+                            }
+                          });
+                          return Array.from(uniqueWaiters.values()).map(w => (
+                            <Badge key={w.name} variant="outline" className="text-xs bg-[#F5DCD6] text-[#8C3F30] border-[#E8A090]">
+                              🚫 {w.name} {w.count > 1 ? `(${w.count}次)` : ''}
+                            </Badge>
+                          ));
+                        })()}
+                      </div>
+                    </div>
                   )}
                   {customerHistory.sourceCsName && (
                     <p className="text-xs text-[#94724A]">历史客服: {customerHistory.sourceCsName}</p>

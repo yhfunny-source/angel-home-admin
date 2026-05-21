@@ -315,11 +315,14 @@ async function initDatabase() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
 
-    // 兼容升级：给已有表添加新字段
+    // 兼容升级：给已有表添加新字段和索引
     try {
       await conn.execute('ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_type ENUM("old","new")');
       await conn.execute('ALTER TABLE orders ADD COLUMN IF NOT EXISTS history_count INT DEFAULT 1');
-    } catch (e) { /* 字段已存在会报错，忽略 */ }
+      await conn.execute('CREATE INDEX IF NOT EXISTS idx_cust_phone ON customers(phone)');
+      await conn.execute('CREATE INDEX IF NOT EXISTS idx_cust_wechat ON customers(wechat)');
+      await conn.execute('CREATE INDEX IF NOT EXISTS idx_cust_qq ON customers(qq)');
+    } catch (e) { /* 字段/索引已存在会报错，忽略 */ }
 
     console.log('[DB] All tables initialized');
   } finally {
@@ -688,17 +691,24 @@ app.post('/api/orders', authMiddleware, async (req, res) => {
     let isOldCustomer = false;
     let matchedCustomer = null;
 
-    if (phone || wechat || qq) {
+    // 标准化：空字符串视为 null
+    const normalizedPhone = phone && String(phone).trim() ? String(phone).trim() : null;
+    const normalizedWechat = wechat && String(wechat).trim() ? String(wechat).trim() : null;
+    const normalizedQq = qq && String(qq).trim() ? String(qq).trim() : null;
+
+    console.log('[CUSTOMER MATCH] phone=', normalizedPhone, 'wechat=', normalizedWechat, 'qq=', normalizedQq);
+
+    if (normalizedPhone || normalizedWechat || normalizedQq) {
       const conditions = [];
       const params = [];
-      if (phone) { conditions.push('phone = ?'); params.push(phone); }
-      if (wechat) { conditions.push('wechat = ?'); params.push(wechat); }
-      if (qq) { conditions.push('qq = ?'); params.push(qq); }
+      if (normalizedPhone) { conditions.push('phone = ?'); params.push(normalizedPhone); }
+      if (normalizedWechat) { conditions.push('wechat = ?'); params.push(normalizedWechat); }
+      if (normalizedQq) { conditions.push('qq = ?'); params.push(normalizedQq); }
 
-      const [matched] = await pool.execute(
-        `SELECT * FROM customers WHERE (${conditions.join(' OR ')}) AND status = 'active' LIMIT 1`,
-        params
-      );
+      const sql = `SELECT * FROM customers WHERE (${conditions.join(' OR ')}) AND status = 'active' LIMIT 1`;
+      console.log('[CUSTOMER MATCH] SQL:', sql, 'params:', params);
+      const [matched] = await pool.execute(sql, params);
+      console.log('[CUSTOMER MATCH] matched:', matched.length, 'rows');
 
       if (matched.length > 0) {
         // 老客户 - 更新
@@ -709,17 +719,21 @@ app.post('/api/orders', authMiddleware, async (req, res) => {
           'UPDATE customers SET order_count = order_count + 1, last_contact_date = ? WHERE id = ?',
           [nowBeijing(), customerId]
         );
+        console.log('[CUSTOMER MATCH] 老客户:', matchedCustomer.name, 'order_count+1');
       } else {
         // 新客户 - 创建客户资产
         customerId = generateId();
         await pool.execute(
           `INSERT INTO customers (id, name, phone, wechat, qq, source_store_id, source_store_name, source_cs_id, source_cs_name, order_count, total_spend, first_contact_date, last_contact_date, status)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, 'active')`,
-          [customerId, customerName || null, phone || null, wechat || null, qq || null,
+          [customerId, customerName || null, normalizedPhone, normalizedWechat, normalizedQq,
            storeId || null, storeName || null, submitterId || req.userId, submittedBy || null,
            nowBeijing(), nowBeijing()]
         );
+        console.log('[CUSTOMER MATCH] 新客户创建:', customerId);
       }
+    } else {
+      console.log('[CUSTOMER MATCH] 无三要素，跳过客户匹配');
     }
 
     // ========== 创建订单 ==========
