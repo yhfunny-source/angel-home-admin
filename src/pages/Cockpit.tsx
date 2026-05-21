@@ -198,7 +198,7 @@ export default function Cockpit() {
       {/* 订单详情弹窗 */}
       {showOrderDetail && selectedOrder && (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowOrderDetail(false)}>
-          <div className="rounded-2xl shadow-2xl max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-[#4A3A2F]">订单详情</h3>

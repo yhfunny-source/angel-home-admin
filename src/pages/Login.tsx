@@ -86,7 +86,7 @@ export default function Login() {
             <div className="w-16 h-16 rounded-xl mx-auto mb-4 flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #C89F7F, #B88F6F)' }}>
               <span className="text-white text-2xl font-bold">A</span>
             </div>
-            <h1 className="text-2xl font-bold" style={{ color: '#4A3A2F' }}>天使到家</h1>
+            <h1 className="text-2xl font-bold" style={{ color: '#4A3A2F' }}>废墟计划</h1>
             <p className="text-sm mt-1" style={{ color: '#A08F80' }}>服务管理系统</p>
           </div>
 

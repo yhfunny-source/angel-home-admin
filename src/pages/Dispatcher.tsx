@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useOrderNotification } from '@/hooks/useOrderNotification';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
@@ -8,23 +9,32 @@ import { storage } from '@/lib/storage';
 import {
   getOrders, getWaiters,
   updateOrder, createReview, getReviews,
-  formatDateTime, generateId,
+  formatDateTime, generateId, searchCustomers, addCustomerService,
 } from '@/lib/api';
-import type { Order, Waiter, OrderStatus } from '@/types';
+import type { Order, Waiter, OrderStatus, Customer } from '@/types';
 import PasswordChangeDialog from '@/components/PasswordChangeDialog';
 
-const statusLabels: Record<OrderStatus, string> = {
-  pending: '待派单', assigned: '已派单', arrived: '已到店',
-  serving: '服务中', completed: '已完成', rated: '已评价', cancelled: '已取消',
+const statusLabels: Record<string, string> = {
+  pending: '待派单',
+  assigned: '已派单',
+  departed: '已出发',
+  arrived: '已到达',
+  serving: '服务中',
+  completed: '已完成',
+  rated: '已评价',
+  rejected: '被退',
+  cancelled: '彻底失败',
 };
 
-const statusColors: Record<OrderStatus, string> = {
+const statusColors: Record<string, string> = {
   pending: 'bg-[#E8DFD2] text-[#726255]',
   assigned: 'bg-[#E5DCD0] text-[#A87F5F]',
-  arrived: 'bg-[#E5DCD0] text-[#6B4A38]',
+  departed: 'bg-[#E8EDF5] text-[#5C7295]',
+  arrived: 'bg-[#EDE8F5] text-[#7A6FA8]',
   serving: 'bg-[#F7EEDB] text-[#A87F5F]',
   completed: 'bg-[#DDE5D8] text-[#3D4F3A]',
   rated: 'bg-[#FFF1E3] text-[#A87F5F]',
+  rejected: 'bg-[#F5DCD6] text-[#8C3F30]',
   cancelled: 'bg-[#F5DCD6] text-[#8C3F30]',
 };
 
@@ -33,7 +43,7 @@ export default function Dispatcher() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [waiters, setWaiters] = useState<Waiter[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'pending' | 'active' | 'completed'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'active' | 'rejected' | 'completed'>('pending');
   const [showDetail, setShowDetail] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [showAssign, setShowAssign] = useState(false);
@@ -45,7 +55,22 @@ export default function Dispatcher() {
   const [reviewComment, setReviewComment] = useState('');
   const [reviewedOrders, setReviewedOrders] = useState<Set<string>>(new Set());
   const [completionNote, setCompletionNote] = useState('');
+  const [completionInfoFee, setCompletionInfoFee] = useState(''); // 完成时录入信息费（业绩）
   const [showComplete, setShowComplete] = useState(false);
+  // 被退弹窗状态
+  const [showReject, setShowReject] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectNote, setRejectNote] = useState('');
+  // 客户历史消费
+  const [customerHistory, setCustomerHistory] = useState<Customer | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  // 被退原因选项
+  const rejectReasons = [
+    { value: 'too_expensive', label: '嫌贵' },
+    { value: 'person_not_satisfy', label: '对人不满意' },
+    { value: 'service_not_satisfy', label: '对服务不满意' },
+    { value: 'other', label: '其他' },
+  ];
 
   const userStr = storage.get('user');
   const user = userStr ? JSON.parse(userStr) : null;
@@ -104,22 +129,56 @@ export default function Dispatcher() {
     return () => clearInterval(timer);
   }, []);
 
+  // 订单状态变化通知 - 提示音(6秒) + 弹窗
+  useOrderNotification(orders, (order, oldStatus, newStatus) => {
+    const sLabels: Record<string, string> = {
+      pending: '待派单', assigned: '已派单', departed: '已出发', arrived: '已到达',
+      serving: '服务中', completed: '已完成', rated: '已评价', rejected: '被退', cancelled: '彻底失败',
+    };
+    // 派单侠只关注与自己相关的订单
+    if (order.dispatcherId === user?.id || !order.dispatcherId) {
+      toast.info(`订单状态变化：${order.customerName || '匿名客户'} [${sLabels[oldStatus] || oldStatus}] → [${sLabels[newStatus] || newStatus}]`, {
+        duration: 6000,
+      });
+    }
+  });
+
   // 过滤
   const pendingOrders = orders.filter(o => o.status === 'pending');
-  const activeOrders = orders.filter(o => ['assigned', 'arrived', 'serving'].includes(o.status));
+  const activeOrders = orders.filter(o => ['assigned', 'departed', 'arrived', 'serving'].includes(o.status));
+  const rejectedOrders = orders.filter(o => o.status === 'rejected');
   const completedOrders = orders.filter(o => o.status === 'completed' || o.status === 'rated');
 
-  const filteredOrders = activeTab === 'pending' ? pendingOrders : activeTab === 'active' ? activeOrders : completedOrders;
+  const filteredOrders = activeTab === 'pending' ? pendingOrders : activeTab === 'active' ? activeOrders : activeTab === 'rejected' ? rejectedOrders : completedOrders;
 
   const openDetail = (order: Order) => {
     setSelectedOrder(order);
     setShowDetail(true);
   };
 
-  const openAssign = (order: Order) => {
+  const openAssign = async (order: Order) => {
     setSelectedOrder(order);
     setAssignWaiterId('');
+    setCustomerHistory(null);
     setShowAssign(true);
+    // 搜索客户历史消费
+    if (order.phone || order.wechat || order.qq) {
+      setLoadingHistory(true);
+      try {
+        const params: any = {};
+        if (order.phone) params.phone = order.phone;
+        else if (order.wechat) params.wechat = order.wechat;
+        else if (order.qq) params.qq = order.qq;
+        const results = await searchCustomers(params);
+        if (results && results.length > 0) {
+          setCustomerHistory(results[0]);
+        }
+      } catch (e) {
+        console.log('客户搜索失败:', e);
+      } finally {
+        setLoadingHistory(false);
+      }
+    }
   };
 
   const handleAssign = async () => {
@@ -133,9 +192,13 @@ export default function Dispatcher() {
         dispatcherId: user?.id,
         dispatcherName: user?.name || user?.username,
       });
-      toast.success('派单成功');
+      toast.success('派单成功，服务员已标记为忙碌');
       setShowAssign(false);
+      setAssignWaiterId('');
       loadData();
+      // 刷新服务员列表，忙碌的服务员将不再显示
+      const refreshedWaiters = await getWaiters();
+      setWaiters(refreshedWaiters);
     } catch (e: any) {
       toast.error(e.message || '派单失败');
     }
@@ -143,14 +206,24 @@ export default function Dispatcher() {
 
   const handleStatusUpdate = async (orderId: string, status: OrderStatus) => {
     try {
-      if (status === 'serving') {
-        await updateOrder(orderId, { status });
-        toast.success('状态更新为服务中');
-      } else if (status === 'completed') {
-        setSelectedOrder(orders.find(o => o.id === orderId) || null);
+      if (status === 'completed') {
+        const order = orders.find(o => o.id === orderId) || null;
+        setSelectedOrder(order);
         setCompletionNote('');
+        setCompletionInfoFee(order?.infoFee ? String(order.infoFee) : '');
         setShowComplete(true);
         return;
+      } else if (status === 'rejected') {
+        const order = orders.find(o => o.id === orderId) || null;
+        setSelectedOrder(order);
+        setRejectReason('');
+        setRejectNote('');
+        setShowReject(true);
+        return;
+      } else {
+        // departed, arrived, serving 等直接更新状态
+        await updateOrder(orderId, { status });
+        toast.success(status === 'departed' ? '状态更新为已出发' : status === 'arrived' ? '状态更新为已到达' : status === 'serving' ? '开始服务' : '状态已更新');
       }
       loadData();
     } catch (e: any) {
@@ -158,19 +231,72 @@ export default function Dispatcher() {
     }
   };
 
+  const handleReject = async () => {
+    if (!selectedOrder) return;
+    if (!rejectReason) {
+      toast.error('请选择被退原因');
+      return;
+    }
+    try {
+      await updateOrder(selectedOrder.id, {
+        status: 'rejected',
+        rejectReason,
+        rejectNote,
+        rejectAt: new Date().toISOString(),
+      });
+      toast.success('订单已标记为被退，已通知客服跟进');
+      setShowReject(false);
+      loadData();
+    } catch (e: any) {
+      toast.error(e.message || '操作失败');
+    }
+  };
+
   const handleComplete = async () => {
     if (!selectedOrder) return;
+    // 信息费必填
+    const fee = parseFloat(completionInfoFee || '0');
+    if (fee <= 0) {
+      toast.error('请输入订单信息费（业绩金额）');
+      return;
+    }
     try {
       await updateOrder(selectedOrder.id, {
         status: 'completed',
+        infoFee: fee,
         completionNote: completionNote || undefined,
       });
-      toast.success('订单完成');
+      // 同步客户资产 - 记录服务数据
+      try {
+        await addCustomerService({
+          customerId: customerHistory?.id || generateId(),
+          orderId: selectedOrder.id,
+          serviceDate: nowBeijing(),
+          storeId: selectedOrder.storeId,
+          storeName: selectedOrder.storeName,
+          csId: selectedOrder.submitterId,
+          csName: selectedOrder.submittedBy || selectedOrder.staffName,
+          waiterId: selectedOrder.waiterId,
+          waiterName: selectedOrder.waiterName,
+          rating: 5,
+          infoFee: fee,
+          customerType: customerHistory && customerHistory.orderCount > 0 ? 'old' : 'new',
+        });
+      } catch (e) {
+        console.log('客户资产同步失败:', e);
+      }
+      toast.success('订单完成，业绩 ¥' + fee + ' 已记录');
       setShowComplete(false);
       loadData();
     } catch (e: any) {
       toast.error(e.message || '操作失败');
     }
+  };
+
+  const nowBeijing = () => {
+    const d = new Date();
+    d.setHours(d.getHours() + 8);
+    return d.toISOString().slice(0, 19).replace('T', ' ');
   };
 
   const openReview = (order: Order) => {
@@ -259,6 +385,7 @@ export default function Dispatcher() {
           {[
             { key: 'pending' as const, label: '待派单', count: pendingOrders.length },
             { key: 'active' as const, label: '进行中', count: activeOrders.length },
+            { key: 'rejected' as const, label: '被退', count: rejectedOrders.length },
             { key: 'completed' as const, label: '已完成', count: completedOrders.length },
           ].map(tab => (
             <button
@@ -267,12 +394,12 @@ export default function Dispatcher() {
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                 activeTab === tab.key
                   ? 'bg-[#5C7258] text-white'
-                  : 'bg-white text-[#726255] hover:bg-[#E8DFD2] border border-[#E8DFD2]'
+                  : 'bg-[#FFFFFF] text-[#726255] hover:bg-[#E8DFD2] border border-[#E8DFD2]'
               }`}
             >
               {tab.label}
               {tab.count > 0 && (
-                <span className={`ml-1.5 text-xs rounded-full px-1.5 py-0.5 ${activeTab === tab.key ? 'bg-white text-[#4A5E48]' : 'bg-[#FBEAE6]0 text-white'}`}>
+                <span className={`ml-1.5 text-xs rounded-full px-1.5 py-0.5 ${activeTab === tab.key ? 'bg-[#FFFFFF] text-[#4A5E48]' : 'bg-[#B85C4A] text-white'}`}>
                   {tab.count}
                 </span>
               )}
@@ -287,7 +414,7 @@ export default function Dispatcher() {
           </div>
         ) : filteredOrders.length === 0 ? (
           <div className="text-center py-12 text-[#A08F80]  rounded-xl border border-[#E8DFD2]">
-            暂无{activeTab === 'pending' ? '待派单' : activeTab === 'active' ? '进行中' : '已完成'}的订单
+            暂无{activeTab === 'pending' ? '待派单' : activeTab === 'active' ? '进行中' : activeTab === 'rejected' ? '被退' : '已完成'}的订单
           </div>
         ) : (
           <div className="space-y-3">
@@ -376,14 +503,38 @@ export default function Dispatcher() {
                   </div>
                   <div className="flex flex-col gap-2 ml-4 min-w-[72px]">
                     <button onClick={() => openDetail(order)} className="text-xs text-[#B88F6F] hover:text-[#7A5C48] py-2 px-3 rounded-lg bg-[#F0E8DF] hover:bg-[#E5DCD0] transition-colors text-center">👁️ 详情</button>
+                    {/* 状态流转按钮 */}
                     {order.status === 'pending' && (
                       <button onClick={() => openAssign(order)} className="text-sm font-bold text-white bg-gradient-to-r from-[#5C7258] to-[#4A5E48] hover:from-emerald-600 hover:to-teal-600 py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">📋 派单</button>
                     )}
                     {order.status === 'assigned' && (
-                      <button onClick={() => handleStatusUpdate(order.id, 'serving')} className="text-sm font-bold text-white bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">▶️ 服务中</button>
+                      <>
+                        <button onClick={() => handleStatusUpdate(order.id, 'departed')} className="text-sm font-bold text-white bg-gradient-to-r from-[#5C7295] to-[#4A5E88] hover:from-[#4A6288] hover:to-[#3A4E78] py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">🚗 已出发</button>
+                        <button onClick={() => handleStatusUpdate(order.id, 'rejected')} className="text-sm font-bold text-white bg-gradient-to-r from-[#B85C4A] to-[#8C3F30] hover:from-[#A04C3A] hover:to-[#7A2F20] py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">↩️ 被退</button>
+                      </>
+                    )}
+                    {order.status === 'departed' && (
+                      <>
+                        <button onClick={() => handleStatusUpdate(order.id, 'arrived')} className="text-sm font-bold text-white bg-gradient-to-r from-[#7A6FA8] to-[#6A5F98] hover:from-[#6A5F98] hover:to-[#5A4F88] py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">📍 已到达</button>
+                        <button onClick={() => handleStatusUpdate(order.id, 'rejected')} className="text-sm font-bold text-white bg-gradient-to-r from-[#B85C4A] to-[#8C3F30] hover:from-[#A04C3A] hover:to-[#7A2F20] py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">↩️ 被退</button>
+                      </>
+                    )}
+                    {order.status === 'arrived' && (
+                      <>
+                        {/* 到达后两个大选项：成功 / 失败 */}
+                        <button onClick={() => handleStatusUpdate(order.id, 'serving')} className="text-sm font-bold text-white bg-gradient-to-r from-[#5C7258] to-[#4A5E48] hover:from-green-600 hover:to-emerald-600 py-4 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">
+                          ✅ 成功<br/><span className="text-xs font-normal">开始服务</span>
+                        </button>
+                        <button onClick={() => handleStatusUpdate(order.id, 'rejected')} className="text-sm font-bold text-white bg-gradient-to-r from-[#B85C4A] to-[#8C3F30] hover:from-[#A04C3A] hover:to-[#7A2F20] py-4 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">
+                          ❌ 失败<br/><span className="text-xs font-normal">被退（需选择原因）</span>
+                        </button>
+                      </>
                     )}
                     {order.status === 'serving' && (
-                      <button onClick={() => handleStatusUpdate(order.id, 'completed')} className="text-sm font-bold text-white bg-gradient-to-r from-[#5C7258] to-[#4A5E48] hover:from-green-600 hover:to-emerald-600 py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">✅ 完成</button>
+                      <>
+                        <button onClick={() => handleStatusUpdate(order.id, 'completed')} className="text-sm font-bold text-white bg-gradient-to-r from-[#5C7258] to-[#4A5E48] hover:from-green-600 hover:to-emerald-600 py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">✅ 完成</button>
+                        <button onClick={() => handleStatusUpdate(order.id, 'rejected')} className="text-sm font-bold text-white bg-gradient-to-r from-[#B85C4A] to-[#8C3F30] hover:from-[#A04C3A] hover:to-[#7A2F20] py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">↩️ 被退</button>
+                      </>
                     )}
                     {(order.status === 'completed' || order.status === 'rated') && !reviewedOrders.has(order.id) && (
                       <button onClick={() => openReview(order)} className="text-sm font-bold text-white bg-gradient-to-r from-[#C89F7F] to-[#B88F6F] hover:from-[#B88F6F] hover:to-[#A87F5F] py-3 px-4 rounded-xl shadow-md hover:shadow-lg transition-all active:scale-95 text-center">⭐ 评价</button>
@@ -402,9 +553,31 @@ export default function Dispatcher() {
       {/* 派单弹窗 */}
       {showAssign && selectedOrder && (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowAssign(false)}>
-          <div className="rounded-2xl shadow-2xl max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full mx-4" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">选择服务员</h3>
+              {/* 客户历史消费 */}
+              {loadingHistory ? (
+                <div className="mb-3 p-3 bg-[#FAF5F0] rounded-lg text-sm text-[#A08F80]">🔍 查询客户历史中...</div>
+              ) : customerHistory ? (
+                <div className="mb-3 p-3 bg-gradient-to-r from-[#FFF1E3] to-[#F7EEDB] rounded-lg border border-[#F7EEDB]">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm font-bold text-[#A87F5F]">👤 {customerHistory.name || selectedOrder.customerName || '匿名'}</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-[#C89F7F] text-white font-medium">
+                      {customerHistory.orderCount > 0 ? `回头客 · ${customerHistory.orderCount}次消费` : '新客户'}
+                    </span>
+                    {customerHistory.isVip && <span className="text-xs px-2 py-0.5 rounded-full bg-[#FBBF24] text-white font-medium">VIP</span>}
+                  </div>
+                  {customerHistory.totalSpend > 0 && (
+                    <p className="text-xs text-[#94724A]">累计消费: ¥{customerHistory.totalSpend.toFixed(0)}</p>
+                  )}
+                  {customerHistory.sourceCsName && (
+                    <p className="text-xs text-[#94724A]">历史客服: {customerHistory.sourceCsName}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="mb-3 p-3 bg-[#FAF5F0] rounded-lg text-sm text-[#A08F80]">🆕 新客户，无历史消费记录</div>
+              )}
               <p className="text-sm text-[#A08F80] mb-4">
                 客户: {selectedOrder.customerName || '匿名'} · {selectedOrder.address}
               </p>
@@ -425,7 +598,15 @@ export default function Dispatcher() {
                       {w.name[0]}
                     </div>
                     <div className="flex-1">
-                      <p className="font-medium text-[#4A3A2F]">{w.name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-[#4A3A2F]">{w.name}</p>
+                        {/* 显示状态标签 */}
+                        {(w as any).status === 'busy' ? (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-[#F5DCD6] text-[#8C3F30] font-medium">忙碌中</span>
+                        ) : (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-[#EEF1EB] text-[#5C7258] font-medium">空闲</span>
+                        )}
+                      </div>
                       <p className="text-xs text-[#A08F80]">
                         ★ {typeof w.rating === 'number' ? w.rating.toFixed(1) : parseFloat(w.rating || '0').toFixed(1)} · {w.age || '-'}岁 · {w.height || '-'}
                       </p>
@@ -445,13 +626,63 @@ export default function Dispatcher() {
         </div>
       )}
 
+      {/* 被退弹窗 */}
+      {showReject && selectedOrder && (
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowReject(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <h3 className="text-lg font-bold text-[#4A3A2F] mb-2">↩️ 订单被退</h3>
+              <p className="text-sm text-[#A08F80] mb-4">客户: {selectedOrder.customerName || '匿名'}</p>
+              <div className="mb-4">
+                <Label className="text-[#B85C4A] font-medium">被退原因 *</Label>
+                <div className="space-y-2 mt-2">
+                  {rejectReasons.map(r => (
+                    <label key={r.value} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      rejectReason === r.value ? 'border-[#C89F7F] bg-[#FFF1E3]' : 'border-[#E8DFD2] hover:bg-[#F5EFE6]'
+                    }`}>
+                      <input type="radio" name="rejectReason" value={r.value} checked={rejectReason === r.value} onChange={e => setRejectReason(e.target.value)} />
+                      <span className="text-sm">{r.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              {rejectReason === 'other' && (
+                <div className="mb-4">
+                  <Label>其他备注</Label>
+                  <textarea value={rejectNote} onChange={e => setRejectNote(e.target.value)} placeholder="请填写具体原因..." className="w-full mt-2 p-3 border border-[#E8DFD2] rounded-lg text-sm min-h-[80px]" />
+                </div>
+              )}
+              <div className="flex gap-3">
+                <Button className="flex-1 bg-[#E8DFD2] hover:bg-[#D8CBC0] text-[#726255]" onClick={() => setShowReject(false)}>取消</Button>
+                <Button className="flex-1 bg-[#B85C4A] hover:bg-[#8C3F30]" onClick={handleReject}>确认被退</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 完成弹窗 */}
       {showComplete && selectedOrder && (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowComplete(false)}>
-          <div className="rounded-2xl shadow-2xl max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
             <div className="p-6">
-              <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">完成订单</h3>
+              <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">完成订单 & 录入业绩</h3>
               <p className="text-sm text-[#A08F80] mb-4">客户: {selectedOrder.customerName || '匿名'}</p>
+              {/* 信息费（业绩）- 必填 */}
+              <div className="mb-4 bg-[#FFF1E3] rounded-lg p-3 border border-[#F7EEDB]">
+                <Label className="text-[#A87F5F] font-medium">💎 订单信息费（业绩）*</Label>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-[#C89F7F] font-bold text-lg">¥</span>
+                  <input
+                    type="number"
+                    value={completionInfoFee}
+                    onChange={e => setCompletionInfoFee(e.target.value)}
+                    placeholder="输入信息费金额（必填）"
+                    className="flex-1 h-10 rounded-md border border-[#E8DFD2] px-3 text-sm"
+                  />
+                </div>
+                <p className="text-xs text-[#B88F6F] mt-1">此金额为订单业绩，将汇总到财务和BOSS数据大盘</p>
+              </div>
               <div className="mb-4">
                 <Label>完成备注（可选）</Label>
                 <textarea
@@ -473,7 +704,7 @@ export default function Dispatcher() {
       {/* 评价弹窗 */}
       {showReview && selectedOrder && (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowReview(false)}>
-          <div className="rounded-2xl shadow-2xl max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-2">评价服务员</h3>
               <p className="text-sm text-[#A08F80] mb-4">{selectedOrder.waiterName}</p>
@@ -520,7 +751,7 @@ export default function Dispatcher() {
               </div>
               <div className="flex gap-3">
                 <Button variant="outline" className="flex-1" onClick={() => setShowReview(false)}>取消</Button>
-                <Button className="flex-1 bg-[#FFF8E6]0 hover:bg-[#B88F6F]" onClick={handleReview}>提交评价</Button>
+                <Button className="flex-1 bg-[#C89F7F] text-white hover:bg-[#B88F6F]" onClick={handleReview}>提交评价</Button>
               </div>
             </div>
           </div>
@@ -530,7 +761,7 @@ export default function Dispatcher() {
       {/* 详情弹窗 */}
       {showDetail && selectedOrder && (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowDetail(false)}>
-          <div className="rounded-2xl shadow-2xl max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-[#4A3A2F]">订单详情</h3>

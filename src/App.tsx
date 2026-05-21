@@ -6,6 +6,7 @@ import Admin from '@/pages/Admin';
 import Cockpit from '@/pages/Cockpit';
 import SendOrder from '@/pages/SendOrder';
 import Dispatcher from '@/pages/Dispatcher';
+import CustomerAssets from '@/pages/CustomerAssets';
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
         <Route path="/cockpit" element={<Cockpit />} />
         <Route path="/send-order" element={<SendOrder />} />
         <Route path="/dispatcher" element={<Dispatcher />} />
+        <Route path="/customers" element={<CustomerAssets />} />
         <Route path="/" element={<Login />} />
         <Route path="*" element={<Login />} />
       </Routes>

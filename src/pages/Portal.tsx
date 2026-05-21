@@ -88,7 +88,7 @@ export default function Portal() {
             <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #C89F7F, #B88F6F)' }}>
               <span className="text-white font-bold text-sm">A</span>
             </div>
-            <span className="font-semibold" style={{ color: '#4A3A2F' }}>天使到家</span>
+            <span className="font-semibold" style={{ color: '#4A3A2F' }}>废墟计划</span>
           </div>
           <div className="flex items-center gap-4">
             <span className="text-sm" style={{ color: '#726255' }}>

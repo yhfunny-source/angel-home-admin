@@ -12,11 +12,14 @@ import {
   deleteUser, deleteStaff, deleteWaiter, deleteStore,
   formatMoney,
 } from '@/lib/api';
-import type { User, Staff, Waiter, Store, UserRole } from '@/types';
+import type { User, Staff, Waiter, Store, UserRole, DailyRecord } from '@/types';
 import PasswordChangeDialog from '@/components/PasswordChangeDialog';
+import { getAllDailyRecords } from '@/lib/api';
 
 const navSections = [
   { title: '', items: [{ id: 'overview', label: '概览', icon: '\uD83D\uDCCA' }] },
+  { title: '客户资产', items: [{ id: 'customers', label: '客户资产库', icon: '\uD83D\uDC65' }] },
+  { title: '业务数据', items: [{ id: 'checkin', label: '打卡记录', icon: '\uD83D\uDCC5' }] },
   { title: '组织权限', items: [{ id: 'users', label: '用户账号', icon: '\uD83D\uDC64' }, { id: 'roles', label: '角色权限', icon: '\uD83D\uDEE1\uFE0F' }] },
   { title: '门店管理', items: [{ id: 'stores', label: '门店列表', icon: '\uD83C\uDFEA' }] },
   { title: '人员管理', items: [{ id: 'staff', label: '员工档案', icon: '\uD83D\uDCAC' }, { id: 'waiters', label: '服务员档案', icon: '\uD83D\uDC54' }] },
@@ -52,8 +55,12 @@ export default function Admin() {
   const [bindStoreId, setBindStoreId] = useState('');
   const [bindStoreName, setBindStoreName] = useState('');
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedBindStaffId, setSelectedBindStaffId] = useState('');
   const [detailStaff, setDetailStaff] = useState<Staff | null>(null);
+  const [checkinRecords, setCheckinRecords] = useState<DailyRecord[]>([]);
+  const [checkinLoading, setCheckinLoading] = useState(false);
+  const [checkinFilter, setCheckinFilter] = useState({ startDate: '', endDate: '', csName: '' });
 
   const currentUser = JSON.parse(storage.get('user') || '{}');
 
@@ -70,7 +77,29 @@ export default function Admin() {
     setLoading(false);
   };
 
+  const loadCheckinRecords = async () => {
+    setCheckinLoading(true);
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const start = checkinFilter.startDate || sevenDaysAgo;
+      const end = checkinFilter.endDate || today;
+      const records = await getAllDailyRecords({ startDate: start, endDate: end });
+      console.log('[Debug] 打卡记录原始数据:', records);
+      if (records.length > 0) {
+        console.log('[Debug] 第一条记录:', JSON.stringify(records[0], null, 2));
+      }
+      setCheckinRecords(records);
+    } catch (e: any) {
+      console.error('[Debug] 打卡记录加载失败:', e);
+      toast.error('加载打卡记录失败: ' + (e.message || '未知错误'));
+    } finally {
+      setCheckinLoading(false);
+    }
+  };
+
   useEffect(() => { loadData(); }, []);
+  useEffect(() => { if (activeTab === 'checkin') loadCheckinRecords(); }, [activeTab, checkinFilter]);
 
   // Get users with customer role
   const customerUsers = users.filter(u => (u.roles || []).includes('客服'));
@@ -104,7 +133,13 @@ export default function Admin() {
     setFormType(type);
     setEditId(item?.id || '');
     if (type === 'user') {
-      setFormData({ username: item?.username || '', name: item?.name || '', roles: (item?.roles || ['客服']) as UserRole[], phone: item?.phone || '', password: '' });
+      // 兼容单门店和多门店
+      const boundStores = item?.storeIds
+        ? item.storeIds
+        : item?.storeId
+          ? [item.storeId]
+          : [];
+      setFormData({ username: item?.username || '', name: item?.name || '', roles: (item?.roles || ['客服']) as UserRole[], phone: item?.phone || '', password: '', storeIds: boundStores });
     } else if (type === 'staff') {
       setFormData({
         name: item?.name || '', realName: item?.realName || '', phone: item?.phone || '',
@@ -117,52 +152,66 @@ export default function Admin() {
     } else if (type === 'waiter') {
       setFormData({ name: item?.name || '', phone: item?.phone || '', age: item?.age ? String(item.age) : '', height: item?.height || '', bodyType: item?.bodyType || '', cup: item?.cup || '', gender: item?.gender || '女', tags: (item?.tags || []).join(', '), storeId: item?.storeId || '' });
     } else if (type === 'store') {
-      setFormData({ name: item?.name || '', address: item?.address || '', phone: item?.phone || '', rent: item?.rent ? String(item.rent) : '', commissionRate: item?.commissionRate ? String(item.commissionRate) : '', marketingFee: item?.marketingFee ? String(item.marketingFee) : '', operatingCost: item?.operatingCost ? String(item.operatingCost) : '' });
+      setFormData({ name: item?.name || '', address: item?.address || '', phone: item?.phone || '', rent: item?.rent ? String(item.rent) : '', commissionRate: item?.commissionRate ? String(item.commissionRate) : '', marketingFee: item?.marketingFee ? String(item.marketingFee) : '', operatingCost: item?.operatingCost ? String(item.operatingCost) : '', staffUserId: item?.staffUserId || '' });
     }
     setShowForm(true);
   };
 
   const saveForm = async () => {
     try {
+      console.log('saveForm type:', formType, 'editId:', editId, 'formData:', formData);
+      if (!formData.name || !formData.name.trim()) {
+        toast.error('请填写姓名/名称'); return;
+      }
       if (formType === 'user') {
         const data: any = { username: formData.username, name: formData.name, roles: formData.roles, phone: formData.phone, status: 'active' };
         if (formData.password) data.password = formData.password;
-        else if (!editId) data.password = '123456'; // 新建时默认密码
+        else if (!editId) data.password = '123456';
+        // 多门店绑定（最多2个）
+        const storeIds = (formData.storeIds || []).filter(Boolean);
+        if (storeIds.length > 0) {
+          data.storeIds = storeIds.slice(0, 2);
+          data.storeId = storeIds[0]; // 主门店
+        }
         editId ? await updateUser(editId, data) : await createUser(data);
       } else if (formType === 'staff') {
-        const data: any = { name: formData.name, status: 'active' };
-        if (formData.realName) data.realName = formData.realName;
-        if (formData.phone) data.phone = formData.phone;
-        if (formData.idCard) data.idCard = formData.idCard;
+        const data: any = { name: formData.name.trim(), status: 'active' };
+        if (formData.realName) data.realName = formData.realName.trim();
+        if (formData.phone) data.phone = formData.phone.trim();
+        if (formData.idCard) data.idCard = formData.idCard.trim();
         if (formData.gender) data.gender = formData.gender;
-        if (formData.age) data.age = parseInt(formData.age);
-        if (formData.homeAddress) data.homeAddress = formData.homeAddress;
-        if (formData.resume) data.resume = formData.resume;
-        if (formData.bankCard) data.bankCard = formData.bankCard;
-        if (formData.emergencyContact) data.emergencyContact = formData.emergencyContact;
-        if (formData.emergencyPhone) data.emergencyPhone = formData.emergencyPhone;
+        if (formData.age) data.age = parseInt(formData.age) || null;
+        if (formData.homeAddress) data.homeAddress = formData.homeAddress.trim();
+        if (formData.resume) data.resume = formData.resume.trim();
+        if (formData.bankCard) data.bankCard = formData.bankCard.trim();
+        if (formData.emergencyContact) data.emergencyContact = formData.emergencyContact.trim();
+        if (formData.emergencyPhone) data.emergencyPhone = formData.emergencyPhone.trim();
         if (formData.entryDate) data.entryDate = formData.entryDate;
         if (formData.storeId) data.storeId = formData.storeId;
+        console.log('staff data:', JSON.stringify(data));
         editId ? await updateStaff(editId, data) : await createStaff(data);
       } else if (formType === 'waiter') {
-        const data: any = { name: formData.name, status: 'active' };
-        if (formData.phone) data.phone = formData.phone;
-        if (formData.age) data.age = parseInt(formData.age);
-        if (formData.height) data.height = formData.height;
+        const data: any = { name: formData.name.trim(), status: 'active' };
+        if (formData.phone) data.phone = formData.phone.trim();
+        if (formData.age) data.age = parseInt(formData.age) || null;
+        if (formData.height) data.height = formData.height.trim();
         if (formData.bodyType) data.bodyType = formData.bodyType;
         if (formData.cup) data.cup = formData.cup;
         if (formData.gender) data.gender = formData.gender;
         if (formData.tags) data.tags = formData.tags.split(',').map((t: string) => t.trim()).filter(Boolean);
         if (formData.storeId) data.storeId = formData.storeId;
         data.rating = 0;
+        console.log('waiter data:', JSON.stringify(data));
         editId ? await updateWaiter(editId, data) : await createWaiter(data);
       } else if (formType === 'store') {
-        const data = { name: formData.name, address: formData.address, phone: formData.phone, rent: parseFloat(formData.rent) || 0, commissionRate: parseFloat(formData.commissionRate) || 0, marketingFee: parseFloat(formData.marketingFee) || 0, operatingCost: parseFloat(formData.operatingCost) || 0, status: 'active' as const };
+        const data: any = { name: formData.name.trim(), address: (formData.address || '').trim(), phone: (formData.phone || '').trim(), rent: parseFloat(formData.rent) || 0, commissionRate: parseFloat(formData.commissionRate) || 0, marketingFee: parseFloat(formData.marketingFee) || 0, operatingCost: parseFloat(formData.operatingCost) || 0, status: 'active' as const };
+        if (formData.staffUserId) data.staffUserId = formData.staffUserId;
+        console.log('store data:', JSON.stringify(data));
         editId ? await updateStore(editId, data) : await createStore(data);
       }
       toast.success(editId ? '更新成功' : '创建成功');
       setShowForm(false); loadData();
-    } catch (e: any) { toast.error(e.message || '保存失败'); }
+    } catch (e: any) { console.error('saveForm error:', e); toast.error('保存失败: ' + (e.message || JSON.stringify(e))); }
   };
 
   const confirmDelete = (type: string, id: string, name: string) => { setDeleteTarget({ type, id, name }); setShowDelete(true); };
@@ -197,7 +246,7 @@ export default function Admin() {
     { label: '已完成', value: 0, icon: '\u2705', color: 'bg-[#EEF1EB] text-[#4A5E48]' },
     { label: '总收入', value: formatMoney(0), icon: '\uD83D\uDCB0', color: 'bg-[#FFF8E6] text-[#B88F6F]' },
     { label: '营业门店', value: stores.filter(s => s.status === 'active').length, icon: '\uD83C\uDFEA', color: 'bg-[#F0E8DF] text-[#7A5C48]' },
-    { label: '在岗服务员', value: waiters.filter(w => w.status === 'active').length, icon: '\uD83D\uDC54', color: 'bg-[#F0E8DF] text-[#A87F5F]' },
+    { label: '空闲服务员', value: waiters.filter(w => w.status === 'active').length, icon: '\uD83D\uDC54', color: 'bg-[#F0E8DF] text-[#A87F5F]' },
   ], [stores, waiters]);
 
   // Quick entry buttons
@@ -212,9 +261,16 @@ export default function Admin() {
 
   // ===== Render =====
   return (
-    <div className="min-h-screen bg-[#FAF5F0] flex">
+    <div className="min-h-screen bg-[#FAF5F0] flex relative">
+      {/* Mobile overlay */}
+      {sidebarOpen ? (
+        <div className="fixed inset-0 bg-[#4A3A2F]/50 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />
+      ) : null}
+
       {/* Sidebar */}
-      <aside className="w-56 bg-slate-900 text-white flex-shrink-0 flex flex-col">
+      <aside className={sidebarOpen
+        ? 'fixed inset-y-0 left-0 z-50 w-56 bg-[#4A3A2F] text-white flex-shrink-0 flex flex-col lg:static lg:z-auto transition-transform'
+        : 'fixed inset-y-0 left-0 z-50 w-56 bg-[#4A3A2F] text-white flex-shrink-0 flex flex-col lg:static lg:z-auto -translate-x-full lg:translate-x-0 transition-transform'}>
         <div className="h-16 flex items-center px-5 border-b border-[#726255]">
           <div className="w-8 h-8 bg-gradient-to-br from-[#C89F7F] to-[#B88F6F] rounded-lg flex items-center justify-center mr-3">
             <span className="font-bold text-sm">A</span>
@@ -229,10 +285,13 @@ export default function Admin() {
             <div key={section.title || 'main'} className="mb-2">
               {section.title ? <div className="px-5 py-2 text-xs font-medium text-[#A08F80] uppercase tracking-wider">{section.title}</div> : null}
               {section.items.map(item => (
-                <button key={item.id} onClick={() => setActiveTab(item.id)}
+                <button key={item.id} onClick={() => { 
+                    if (item.id === 'customers') { navigate('/customers'); setSidebarOpen(false); return; }
+                    setActiveTab(item.id); setSidebarOpen(false); 
+                  }}
                   className={activeTab === item.id
-                    ? 'w-full flex items-center gap-3 px-5 py-2.5 text-sm transition-colors bg-[#FFF8E6]0/20 text-[#FBBF24] border-r-2 border-amber-400'
-                    : 'w-full flex items-center gap-3 px-5 py-2.5 text-sm transition-colors text-[#A08F80] hover:text-white hover:bg-[#4A3A2F]'}>
+                    ? 'w-full flex items-center gap-3 px-5 py-2.5 text-sm transition-colors bg-[#7A5C48]/30 text-[#DDBFA7] border-r-2 border-[#C89F7F]'
+                    : 'w-full flex items-center gap-3 px-5 py-2.5 text-sm transition-colors text-[#A08F80] hover:text-white hover:bg-[#7A5C48]/20'}>
                   <span className="text-base">{item.icon}</span>
                   <span className="flex-1 text-left">{item.label}</span>
                 </button>
@@ -248,29 +307,32 @@ export default function Admin() {
               <p className="text-xs text-[#A08F80] truncate">{(currentUser?.roles || []).join(', ')}</p>
             </div>
           </div>
-          <Button variant="outline" size="sm" className="w-full border-[#726255] text-[#A08F80] hover:text-white hover:bg-[#4A3A2F] mb-2" onClick={() => setShowPasswordDialog(true)}>
+          <Button variant="outline" size="sm" className="w-full border-[#726255] text-[#A08F80] hover:text-white hover:bg-[#7A5C48]/30 mb-2" onClick={() => setShowPasswordDialog(true)}>
             修改密码
           </Button>
-          <Button variant="outline" size="sm" className="w-full border-[#726255] text-[#A08F80] hover:text-white hover:bg-[#4A3A2F]" onClick={() => { storage.clear(); navigate('/login'); }}>
+          <Button variant="outline" size="sm" className="w-full border-[#726255] text-[#A08F80] hover:text-white hover:bg-[#7A5C48]/30" onClick={() => { storage.clear(); navigate('/login'); }}>
             退出登录
           </Button>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 min-w-0 flex flex-col">
-        <header className="h-14  border-b border-[#E8DFD2] flex items-center px-6 justify-between">
-          <div className="flex items-center gap-3">
-            <Button variant="outline" size="sm" className="text-[#726255] border-[#E8DFD2]" onClick={() => navigate('/portal')}>
+      <main className="flex-1 min-w-0 flex flex-col w-full">
+        <header className="h-14 border-b border-[#E8DFD2] flex items-center px-4 lg:px-6 justify-between gap-2">
+          <div className="flex items-center gap-2 lg:gap-3 min-w-0">
+            <button onClick={() => setSidebarOpen(true)} className="lg:hidden p-2 rounded-lg text-[#726255] hover:bg-[#F5EFE6]">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
+            <Button variant="outline" size="sm" className="text-[#726255] border-[#E8DFD2] shrink-0" onClick={() => navigate('/portal')}>
               ← 返回
             </Button>
-            <div className="flex items-center gap-2 text-sm text-[#A08F80]">
+            <div className="hidden sm:flex items-center gap-2 text-sm text-[#A08F80]">
               <span className="text-[#A08F80]">管理后台</span>
               <span className="text-[#BBABA0]">/</span>
               {navSections.flatMap(s => s.items).find(i => i.id === activeTab)?.label}
             </div>
           </div>
-          <Input placeholder="搜索..." value={search} onChange={e => setSearch(e.target.value)} className="w-48 h-8 text-sm" />
+          <Input placeholder="搜索..." value={search} onChange={e => setSearch(e.target.value)} className="w-32 sm:w-48 h-8 text-sm" />
         </header>
 
         <div className="flex-1 overflow-auto p-6">
@@ -283,37 +345,37 @@ export default function Admin() {
               {/* ====== Overview ====== */}
               {activeTab === 'overview' ? (
                 <div className="space-y-6">
-                  <div className="grid grid-cols-5 gap-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
                     {kpiCards.map(card => (
-                      <div key={card.label} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm">
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-xs text-[#A08F80]">{card.label}</span>
-                          <span className={`w-8 h-8 rounded-lg ${card.color} flex items-center justify-center text-base`}>{card.icon}</span>
+                      <div key={card.label} className="bg-[#FFFFFF] rounded-xl p-4 sm:p-5 border border-[#E8DFD2] shadow-sm">
+                        <div className="flex items-center justify-between mb-2 sm:mb-3">
+                          <span className="text-xs text-[#A08F80] whitespace-nowrap">{card.label}</span>
+                          <span className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg ${card.color} flex items-center justify-center text-base shrink-0`}>{card.icon}</span>
                         </div>
-                        <p className="text-2xl font-bold text-[#4A3A2F]">{card.value}</p>
+                        <p className="text-xl sm:text-2xl font-bold text-[#4A3A2F]">{card.value}</p>
                       </div>
                     ))}
                   </div>
 
-                  <div className="rounded-xl border border-[#E8DFD2] shadow-sm p-5">
-                    <h3 className="text-sm font-semibold text-[#4A3A2F] mb-4">快捷入口</h3>
-                    <div className="grid grid-cols-4 gap-3">
+                  <div className="bg-[#FFFFFF] rounded-xl border border-[#E8DFD2] shadow-sm p-4 sm:p-5">
+                    <h3 className="text-sm font-semibold text-[#4A3A2F] mb-3 sm:mb-4">快捷入口</h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                       {quickEntries.map(item => (
-                        <button key={item.label} onClick={item.action} className={`flex items-center gap-3 p-3 rounded-lg border border-[#E8DFD2] ${item.color} transition-colors text-left`}>
-                          <span className="text-xl">{item.icon}</span>
-                          <span className="text-sm text-[#4A3A2F]">{item.label}</span>
+                        <button key={item.label} onClick={item.action} className={`flex items-center gap-2 sm:gap-3 p-3 rounded-lg border border-[#E8DFD2] bg-[#FAF5F0] ${item.color} transition-colors text-left`}>
+                          <span className="text-xl shrink-0">{item.icon}</span>
+                          <span className="text-sm text-[#4A3A2F] whitespace-nowrap">{item.label}</span>
                         </button>
                       ))}
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-[#E8DFD2] shadow-sm p-5">
-                    <h3 className="text-sm font-semibold text-[#4A3A2F] mb-4">角色分布</h3>
-                    <div className="flex gap-4">
+                  <div className="bg-[#FFFFFF] rounded-xl border border-[#E8DFD2] shadow-sm p-4 sm:p-5">
+                    <h3 className="text-sm font-semibold text-[#4A3A2F] mb-3 sm:mb-4">角色分布</h3>
+                    <div className="grid grid-cols-3 sm:flex sm:gap-4 gap-3">
                       {roleOrder.map(role => (
-                          <div key={role} className="flex-1 text-center p-4 rounded-lg bg-[#FAF5F0]">
-                            <p className="text-2xl font-bold text-[#4A3A2F]">{roleStats[role] || 0}</p>
-                            <Badge variant="outline" className={`mt-2 ${roleColors[role] || ''}`}>{role}</Badge>
+                          <div key={role} className="flex-1 text-center p-3 sm:p-4 rounded-lg bg-[#FAF5F0]">
+                            <p className="text-xl sm:text-2xl font-bold text-[#4A3A2F]">{roleStats[role] || 0}</p>
+                            <Badge variant="outline" className={`mt-1 sm:mt-2 ${roleColors[role] || ''}`}>{role}</Badge>
                           </div>
                       ))}
                     </div>
@@ -326,7 +388,7 @@ export default function Admin() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold text-[#4A3A2F]">用户账号</h2>
-                    <Button size="sm" onClick={() => openForm('user')} className="bg-[#FFF8E6]0 hover:bg-[#B88F6F]">+ 添加</Button>
+                    <Button size="sm" onClick={() => openForm('user')} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F]">+ 添加</Button>
                   </div>
                   <div className="rounded-xl border border-[#E8DFD2] shadow-sm overflow-hidden">
                     <table className="w-full text-sm">
@@ -336,30 +398,47 @@ export default function Admin() {
                           <th className="px-4 py-3 text-left font-medium">姓名</th>
                           <th className="px-4 py-3 text-left font-medium">角色</th>
                           <th className="px-4 py-3 text-left font-medium">手机</th>
+                          <th className="px-4 py-3 text-left font-medium">绑定门店</th>
                           <th className="px-4 py-3 text-right font-medium">操作</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {filteredUsers.length === 0 ? (
-                          <tr><td colSpan={5} className="px-4 py-8 text-center text-[#A08F80]">暂无数据</td></tr>
-                        ) : filteredUsers.map(u => (
-                          <tr key={u.id} className="hover:bg-[#F5EFE6]">
-                            <td className="px-4 py-3 font-medium text-[#4A3A2F]">{u.username}</td>
-                            <td className="px-4 py-3">{u.name || '-'}</td>
-                            <td className="px-4 py-3">
-                              <div className="flex gap-1 flex-wrap">
-                                {(u.roles || []).map(r => (
-                                  <Badge key={r} variant="outline" className={`text-xs ${roleColors[r] || ''}`}>{r}</Badge>
-                                ))}
-                              </div>
-                            </td>
-                            <td className="px-4 py-3">{u.phone || '-'}</td>
-                            <td className="px-4 py-3 text-right">
-                              <button onClick={() => openForm('user', u)} className="text-[#B88F6F] hover:text-[#7A5C48] text-xs mr-3">编辑</button>
-                              <button onClick={() => confirmDelete('user', u.id, u.name || u.username)} className="text-[#B85C4A] hover:text-[#8C3F30] text-xs">删除</button>
-                            </td>
-                          </tr>
-                        ))}
+                          <tr><td colSpan={6} className="px-4 py-8 text-center text-[#A08F80]">暂无数据</td></tr>
+                        ) : filteredUsers.map(u => {
+                          // 获取绑定的门店名称
+                          const boundStoreIds = u.storeIds || (u.storeId ? [u.storeId] : []);
+                          const boundStores = boundStoreIds.map(id => stores.find(s => s.id === id)).filter(Boolean);
+                          return (
+                            <tr key={u.id} className="hover:bg-[#F5EFE6]">
+                              <td className="px-4 py-3 font-medium text-[#4A3A2F]">{u.username}</td>
+                              <td className="px-4 py-3">{u.name || '-'}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex gap-1 flex-wrap">
+                                  {(u.roles || []).map(r => (
+                                    <Badge key={r} variant="outline" className={`text-xs ${roleColors[r] || ''}`}>{r}</Badge>
+                                  ))}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3">{u.phone || '-'}</td>
+                              <td className="px-4 py-3">
+                                {boundStores.length > 0 ? (
+                                  <div className="flex gap-1 flex-wrap">
+                                    {boundStores.map(s => (
+                                      <Badge key={s!.id} variant="outline" className="text-xs bg-[#F0E8DF] text-[#6B4A38] border-[#D8CBC0]">{s!.name}</Badge>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-[#A08F80]">未绑定</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <button onClick={() => openForm('user', u)} className="text-[#B88F6F] hover:text-[#7A5C48] text-xs mr-3">编辑</button>
+                                <button onClick={() => confirmDelete('user', u.id, u.name || u.username)} className="text-[#B85C4A] hover:text-[#8C3F30] text-xs">删除</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -404,7 +483,7 @@ export default function Admin() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold text-[#4A3A2F]">门店列表</h2>
-                    <Button size="sm" onClick={() => openForm('store')} className="bg-[#FFF8E6]0 hover:bg-[#B88F6F]">+ 添加门店</Button>
+                    <Button size="sm" onClick={() => openForm('store')} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F]">+ 添加门店</Button>
                   </div>
                   <div className="rounded-xl border border-[#E8DFD2] shadow-sm overflow-hidden">
                     <table className="w-full text-sm">
@@ -454,7 +533,7 @@ export default function Admin() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold text-[#4A3A2F]">员工档案（人事档案）</h2>
-                    <Button size="sm" onClick={() => openForm('staff')} className="bg-[#FFF8E6]0 hover:bg-[#B88F6F]">+ 添加员工</Button>
+                    <Button size="sm" onClick={() => openForm('staff')} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F]">+ 添加员工</Button>
                   </div>
                   <div className="rounded-xl border border-[#E8DFD2] shadow-sm overflow-hidden">
                     <table className="w-full text-sm">
@@ -505,15 +584,14 @@ export default function Admin() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold text-[#4A3A2F]">服务员档案</h2>
-                    <Button size="sm" onClick={() => openForm('waiter')} className="bg-[#FFF8E6]0 hover:bg-[#B88F6F]">+ 添加</Button>
+                    <Button size="sm" onClick={() => openForm('waiter')} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F]">+ 添加</Button>
                   </div>
                   <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                     {filteredWaiters.length === 0 ? (
                       <div className="col-span-full text-center py-12 text-[#A08F80]  rounded-xl border border-[#E8DFD2]">暂无服务员数据</div>
                     ) : filteredWaiters.map(w => {
-                      const waiterStore = w.storeId ? stores.find(s => s.id === w.storeId) : null;
-                      const statusClass = w.status === 'active' ? 'bg-[#DDE5D8] text-[#3D4F3A]' : w.status === 'busy' ? 'bg-[#F7EEDB] text-[#A87F5F]' : 'bg-[#E8DFD2] text-[#726255]';
-                      const statusLabel = w.status === 'active' ? '在岗' : w.status === 'busy' ? '服务中' : '休息';
+                      const statusClass = w.status === 'active' ? 'bg-[#EEF1EB] text-[#5C7258]' : w.status === 'busy' ? 'bg-[#F5DCD6] text-[#8C3F30]' : 'bg-[#E8DFD2] text-[#726255]';
+                      const statusLabel = w.status === 'active' ? '空闲' : w.status === 'busy' ? '忙碌中' : '休息';
                       return (
                         <div key={w.id} className="rounded-xl border border-[#E8DFD2] shadow-sm p-4 hover:shadow-md transition-shadow">
                           <div className="flex items-start justify-between mb-3">
@@ -532,7 +610,6 @@ export default function Admin() {
                             {w.bodyType ? <p><span className="text-[#A08F80]">身型:</span> {w.bodyType}</p> : null}
                             {w.cup ? <p><span className="text-[#A08F80]">罩杯:</span> {w.cup}</p> : null}
                             {w.gender ? <p><span className="text-[#A08F80]">性别:</span> {w.gender}</p> : null}
-                            {waiterStore ? <p><span className="text-[#A08F80]">门店:</span> {waiterStore.name}</p> : null}
                           </div>
                           {w.tags && w.tags.length > 0 ? (
                             <div className="flex flex-wrap gap-1 mb-3">
@@ -556,6 +633,156 @@ export default function Admin() {
                   </div>
                 </div>
               ) : null}
+
+              {/* ====== Checkin Records ====== */}
+              {activeTab === 'checkin' ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-[#4A3A2F]">客服打卡记录</h2>
+                    <div className="flex items-center gap-2">
+                      <Input type="date" value={checkinFilter.startDate} onChange={e => setCheckinFilter({ ...checkinFilter, startDate: e.target.value })} className="w-32 h-8 text-xs" />
+                      <span className="text-[#A08F80] text-xs">至</span>
+                      <Input type="date" value={checkinFilter.endDate} onChange={e => setCheckinFilter({ ...checkinFilter, endDate: e.target.value })} className="w-32 h-8 text-xs" />
+                      <Button size="sm" onClick={loadCheckinRecords} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F] text-xs">查询</Button>
+                    </div>
+                  </div>
+                  {checkinLoading ? (
+                    <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-4 border-[#C89F7F] border-t-transparent rounded-full animate-spin" /></div>
+                  ) : checkinRecords.length === 0 ? (
+                    <div className="text-center py-12 text-[#A08F80] rounded-xl border border-[#E8DFD2] bg-[#FFFFFF]">暂无打卡记录</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {checkinRecords.map((r, i) => (
+                        <div key={r.id || i} className="rounded-xl border border-[#E8DFD2] p-4 bg-[#FFFFFF]">
+                          {/* 头部：日期 + 客服名 + 店铺名（优先用打卡记录中的门店，其次从用户绑定查找） */}
+                          {(() => {
+                            const csUser = users.find(u => u.id === r.userId);
+                            const csName = csUser?.name || csUser?.username || r.userId;
+                            // 优先用打卡记录自带的 storeName，没有则从用户绑定查找
+                            const recordStoreName = (r as any).storeName || (r as any).store_name;
+                            const recordStoreId = (r as any).storeId || (r as any).store_id;
+                            let displayStoreName = recordStoreName;
+                            if (!displayStoreName && recordStoreId) {
+                              displayStoreName = stores.find((s: Store) => s.id === recordStoreId)?.name;
+                            }
+                            if (!displayStoreName && csUser) {
+                              const boundStoreIds = csUser.storeIds || (csUser.storeId ? [csUser.storeId] : []);
+                              displayStoreName = boundStoreIds
+                                .map((sid: string) => stores.find((s: Store) => s.id === sid)?.name)
+                                .filter(Boolean)[0];
+                            }
+                            return (
+                              <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-sm font-bold text-[#4A3A2F]">{r.recordDate}</span>
+                                  <Badge className="bg-[#EEF1EB] text-[#5C7258] border-0 text-xs">👤 {csName}</Badge>
+                                  {displayStoreName && (
+                                    <Badge className="bg-[#FFF1E3] text-[#B97C4A] border-0 text-xs">📍 {displayStoreName}</Badge>
+                                  )}
+                                </div>
+                                <span className="text-xs text-[#A08F80]">{r.createdAt ? r.createdAt.slice(0, 16).replace('T', ' ') : ''}</span>
+                              </div>
+                            );
+                          })()}
+                          {/* 兼容后端可能返回 snake_case 或 camelCase 字段名 */}
+                          {(() => {
+                            const mc = (r as any).meituanConsults ?? (r as any).meituan_consults ?? 0;
+                            const pc = (r as any).phoneConsults ?? (r as any).phone_consults ?? 0;
+                            const wa = (r as any).wechatAdds ?? (r as any).wechat_adds ?? 0;
+                            const qa = (r as any).qqAdds ?? (r as any).qq_adds ?? 0;
+                            const dc = (r as any).dispatchCount ?? (r as any).dispatch_count ?? 0;
+                            const dl = (r as any).dealCount ?? (r as any).deal_count ?? 0;
+                            const oc = (r as any).oldCustomerDeals ?? (r as any).old_customer_deals ?? 0;
+                            const nc = (r as any).newCustomerDeals ?? (r as any).new_customer_deals ?? 0;
+                            return (
+                              <>
+                                <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 text-center mb-3">
+                                  <div className="rounded-lg p-2 bg-[#F5EFE6]">
+                                    <p className="text-xs text-[#A08F80]">美团咨询</p>
+                                    <p className="font-bold text-[#4A3A2F]">{mc}</p>
+                                  </div>
+                                  <div className="rounded-lg p-2 bg-[#F5EFE6]">
+                                    <p className="text-xs text-[#A08F80]">电话咨询</p>
+                                    <p className="font-bold text-[#4A3A2F]">{pc}</p>
+                                  </div>
+                                  <div className="rounded-lg p-2 bg-[#F5EFE6]">
+                                    <p className="text-xs text-[#A08F80]">微信添加</p>
+                                    <p className="font-bold text-[#4A3A2F]">{wa}</p>
+                                  </div>
+                                  <div className="rounded-lg p-2 bg-[#F5EFE6]">
+                                    <p className="text-xs text-[#A08F80]">QQ添加</p>
+                                    <p className="font-bold text-[#4A3A2F]">{qa}</p>
+                                  </div>
+                                  <div className="rounded-lg p-2 bg-[#F5EFE6]">
+                                    <p className="text-xs text-[#A08F80]">派单</p>
+                                    <p className="font-bold text-[#4A3A2F]">{dc}</p>
+                                  </div>
+                                  <div className="rounded-lg p-2 bg-[#F5EFE6]">
+                                    <p className="text-xs text-[#A08F80]">成单</p>
+                                    <p className="font-bold text-[#C89F7F]">{dl}</p>
+                                  </div>
+                                </div>
+                                {/* 老客/新客细分 */}
+                                {(oc > 0 || nc > 0) && (
+                                  <div className="flex gap-3 mb-3 text-xs">
+                                    <span className="px-2 py-1 rounded-full bg-[#EEF1EB] text-[#5C7258]">老客单 {oc}</span>
+                                    <span className="px-2 py-1 rounded-full bg-[#FFF1E3] text-[#B97C4A]">新客单 {nc}</span>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
+                          {/* 成单客户详细信息卡片 */}
+                          {(() => {
+                            let contacts = r.customerContacts;
+                            if (!contacts && (r as any).customer_contacts) contacts = (r as any).customer_contacts;
+                            if (!contacts && (r as any).contacts) contacts = (r as any).contacts;
+                            if (typeof contacts === 'string') {
+                              try { contacts = JSON.parse(contacts); } catch { contacts = []; }
+                            }
+                            if (!Array.isArray(contacts) || contacts.length === 0) return null;
+                            return (
+                              <div className="mt-2 pt-2 border-t border-[#E8DFD2]">
+                                <p className="text-xs text-[#7A5C48] font-medium mb-2">👥 成单客户资料 ({contacts.length}位)</p>
+                                <div className="space-y-2">
+                                  {contacts.map((c: any, j: number) => (
+                                    <div key={j} className="flex items-center gap-2 bg-[#FAF5F0] rounded-lg p-2">
+                                      {/* 客户类型标签 */}
+                                      <Badge className={`shrink-0 text-xs border-0 ${c.type === 'old' ? 'bg-[#EEF1EB] text-[#5C7258]' : 'bg-[#FFF1E3] text-[#B97C4A]'}`}>
+                                        {c.type === 'old' ? '老客' : '新客'}
+                                      </Badge>
+                                      {/* 客户姓名 */}
+                                      <span className="text-sm font-medium text-[#4A3A2F] min-w-[60px]">{c.name || '匿名'}</span>
+                                      {/* 电话 - BOSS看完整数据，不脱敏 */}
+                                      {c.phone && (
+                                        <span className="text-xs px-2 py-0.5 rounded-full bg-[#F5EFE6] text-[#726255]">
+                                          📞 {c.phone}
+                                        </span>
+                                      )}
+                                      {/* 微信 */}
+                                      {c.wechat && (
+                                        <span className="text-xs px-2 py-0.5 rounded-full bg-[#EEF1EB] text-[#5C7258]">
+                                          💬 {c.wechat}
+                                        </span>
+                                      )}
+                                      {/* QQ */}
+                                      {c.qq && (
+                                        <span className="text-xs px-2 py-0.5 rounded-full bg-[#F0E8DF] text-[#8C6A53]">
+                                          QQ {c.qq}
+                                        </span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </div>
           )}
         </div>
@@ -564,7 +791,7 @@ export default function Admin() {
       {/* ====== Staff Form (HR) ====== */}
       {showForm && formType === 'staff' ? (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowForm(false)}>
-          <div className="rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">{editId ? '编辑' : '添加'}员工档案</h3>
               <div className="grid grid-cols-2 gap-4">
@@ -629,7 +856,7 @@ export default function Admin() {
               </div>
               <div className="flex gap-3 mt-5">
                 <Button variant="outline" className="flex-1" onClick={() => setShowForm(false)}>取消</Button>
-                <Button className="flex-1 bg-[#FFF8E6]0 hover:bg-[#B88F6F]" onClick={saveForm}>保存</Button>
+                <Button className="flex-1 bg-[#C89F7F] text-white hover:bg-[#B88F6F]" onClick={saveForm}>保存</Button>
               </div>
             </div>
           </div>
@@ -639,7 +866,7 @@ export default function Admin() {
       {/* ====== Other Forms ====== */}
       {showForm && formType !== 'staff' ? (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowForm(false)}>
-          <div className="rounded-2xl shadow-2xl max-w-md w-full max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">{editId ? '编辑' : '添加'}{formType === 'user' ? '用户' : formType === 'waiter' ? '服务员' : '门店'}</h3>
               <div className="space-y-3">
@@ -670,6 +897,42 @@ export default function Admin() {
                         })}
                       </div>
                     </div>
+                    <div>
+                      <label className="text-sm text-[#726255]">绑定门店（最多2个）</label>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {stores.map(s => {
+                          const boundStores = formData.storeIds || [];
+                          const isChecked = boundStores.includes(s.id);
+                          return (
+                            <label key={s.id} className={`flex items-center gap-1 px-3 py-1.5 rounded-lg border cursor-pointer transition-colors ${
+                              isChecked
+                                ? 'border-[#C89F7F] bg-[#FFF1E3] text-[#C89F7F]'
+                                : 'border-[#E8DFD2] hover:bg-[#F5EFE6]'
+                            }`}>
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={e => {
+                                  const current = formData.storeIds || [];
+                                  if (e.target.checked) {
+                                    if (current.length >= 2) {
+                                      toast.error('最多只能绑定2个门店');
+                                      return;
+                                    }
+                                    setFormData({ ...formData, storeIds: [...current, s.id] });
+                                  } else {
+                                    setFormData({ ...formData, storeIds: current.filter((id: string) => id !== s.id) });
+                                  }
+                                }}
+                                className="rounded"
+                              />
+                              <span className="text-sm">{s.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <p className="text-xs text-[#A08F80] mt-1">已选 {(formData.storeIds || []).length}/2 个，绑定后该客服新建订单时自动归属主门店</p>
+                    </div>
                   </>
                 ) : formType === 'waiter' ? (
                   <>
@@ -690,13 +953,6 @@ export default function Admin() {
                       <div><label className="text-sm text-[#726255]">身型</label><Input value={formData.bodyType || ''} onChange={e => setFormData({ ...formData, bodyType: e.target.value })} placeholder="苗条" /></div>
                       <div><label className="text-sm text-[#726255]">罩杯</label><Input value={formData.cup || ''} onChange={e => setFormData({ ...formData, cup: e.target.value })} placeholder="C" /></div>
                     </div>
-                    <div>
-                      <label className="text-sm text-[#726255]">所属门店</label>
-                      <select value={formData.storeId || ''} onChange={e => setFormData({ ...formData, storeId: e.target.value })} className="w-full h-10 rounded-md border border-[#E8DFD2] px-3 text-sm">
-                        <option value="">请选择</option>
-                        {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                      </select>
-                    </div>
                     <div><label className="text-sm text-[#726255]">标签</label><Input value={formData.tags || ''} onChange={e => setFormData({ ...formData, tags: e.target.value })} placeholder="专业,准时,热情" /></div>
                   </>
                 ) : formType === 'store' ? (
@@ -704,6 +960,18 @@ export default function Admin() {
                     <div><label className="text-sm text-[#726255]">门店名称</label><Input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="名称" /></div>
                     <div><label className="text-sm text-[#726255]">地址</label><Input value={formData.address || ''} onChange={e => setFormData({ ...formData, address: e.target.value })} placeholder="地址" /></div>
                     <div><label className="text-sm text-[#726255]">电话</label><Input value={formData.phone || ''} onChange={e => setFormData({ ...formData, phone: e.target.value })} placeholder="电话" /></div>
+                    <div>
+                      <label className="text-sm text-[#726255]">绑定客服</label>
+                      <select value={formData.staffUserId || ''} onChange={e => setFormData({ ...formData, staffUserId: e.target.value })} className="w-full h-10 rounded-md border border-[#E8DFD2] px-3 text-sm mt-1">
+                        <option value="">不绑定</option>
+                        {users
+                          .filter((u: User) => (u.roles || []).includes('客服'))
+                          .map((u: User) => (
+                            <option key={u.id} value={u.id}>{u.name} ({u.username})</option>
+                          ))}
+                      </select>
+                      <p className="text-xs text-[#A08F80] mt-1">绑定后该客服新建订单自动归属此门店</p>
+                    </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div><label className="text-sm text-[#726255]">房租</label><Input value={formData.rent || ''} onChange={e => setFormData({ ...formData, rent: e.target.value })} placeholder="0" type="number" /></div>
                       <div><label className="text-sm text-[#726255]">佣金比例(%)</label><Input value={formData.commissionRate || ''} onChange={e => setFormData({ ...formData, commissionRate: e.target.value })} placeholder="0" type="number" /></div>
@@ -715,7 +983,7 @@ export default function Admin() {
               </div>
               <div className="flex gap-3 mt-5">
                 <Button variant="outline" className="flex-1" onClick={() => setShowForm(false)}>取消</Button>
-                <Button className="flex-1 bg-[#FFF8E6]0 hover:bg-[#B88F6F]" onClick={saveForm}>保存</Button>
+                <Button className="flex-1 bg-[#C89F7F] text-white hover:bg-[#B88F6F]" onClick={saveForm}>保存</Button>
               </div>
             </div>
           </div>
@@ -725,7 +993,7 @@ export default function Admin() {
       {/* ====== Bind Staff Modal ====== */}
       {showBindStaff ? (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowBindStaff(false)}>
-          <div className="rounded-2xl shadow-2xl max-w-md w-full" onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-1">绑定客服</h3>
               <p className="text-sm text-[#A08F80] mb-4">门店: <strong>{bindStoreName}</strong></p>
@@ -750,7 +1018,7 @@ export default function Admin() {
               </div>
               <div className="flex gap-3 mt-4">
                 <Button variant="outline" className="flex-1" onClick={() => setShowBindStaff(false)}>取消</Button>
-                <Button className="flex-1 bg-[#F0E8DF]0 hover:bg-[#B88F6F]" onClick={handleBindStaff}>确认绑定</Button>
+                <Button className="flex-1 bg-[#C89F7F] text-white hover:bg-[#B88F6F]" onClick={handleBindStaff}>确认绑定</Button>
               </div>
             </div>
           </div>
@@ -760,7 +1028,7 @@ export default function Admin() {
       {/* ====== Staff Detail Modal ====== */}
       {showStaffDetail && detailStaff ? (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowStaffDetail(false)}>
-          <div className="rounded-2xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-[#4A3A2F]">客服人事档案</h3>
@@ -805,7 +1073,7 @@ export default function Admin() {
       {/* ====== Delete Confirm ====== */}
       {showDelete ? (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowDelete(false)}>
-          <div className="rounded-2xl shadow-2xl max-w-sm w-full" onClick={e => e.stopPropagation()}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-sm w-full" onClick={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#A34E3C] mb-2">确认删除</h3>
               <p className="text-sm text-[#726255] mb-4">确定要删除 <strong>{deleteTarget.name}</strong> 吗？此操作不可恢复。</p>
