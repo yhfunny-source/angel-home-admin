@@ -18,7 +18,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ruinxuji-huimiejihua-2026-secret-k
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || 'Abc123456!!',
+  password: process.env.DB_PASSWORD || 'Tsdj@123@',
   database: process.env.DB_NAME || 'angel_home',
   waitForConnections: true,
   connectionLimit: 10,
