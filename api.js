@@ -1270,4 +1270,10 @@ app.listen(PORT, async () => {
   console.log(`[API] Server running on port ${PORT}`);
   try {
     await initDatabase();
-    console.l
+    console.log('[API] Database initialized');
+  } catch (err) {
+    console.error('[API] DB init error:', err);
+  }
+});
+
+module.exports = app;
