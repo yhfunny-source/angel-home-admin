@@ -287,15 +287,26 @@ export default function SendOrder() {
   const handleSupplement = async () => {
     if (!supplementOrder || !supplementContent.trim()) return;
     try {
-      await addSupplement(supplementOrder.id, supplementContent, {
+      const newMsg = await addSupplement(supplementOrder.id, supplementContent, {
         id: user?.id,
         name: user?.name || user?.username,
         role: '客服',
       });
+      // 立即把新消息添加到订单的 supplements 列表中
+      setOrders(prev => prev.map(o => {
+        if (o.id !== supplementOrder.id) return o;
+        const existing = Array.isArray(o.supplements) ? o.supplements : [];
+        return { ...o, supplements: [...existing, newMsg] };
+      }));
+      // 同时更新 supplementOrder
+      setSupplementOrder(prev => {
+        if (!prev) return prev;
+        const existing = Array.isArray(prev.supplements) ? prev.supplements : [];
+        return { ...prev, supplements: [...existing, newMsg] };
+      });
       toast.success('消息已发送给派单侠');
-      setShowSupplement(false);
       setSupplementContent('');
-      loadData();
+      // 保持弹窗打开，让用户看到发送的消息
     } catch (e: any) {
       toast.error(e.message || '发送失败');
     }

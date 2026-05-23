@@ -29,7 +29,7 @@ export default function DailyRanking({ orders }: DailyRankingProps) {
       return;
     }
 
-    // 使用北京时间（UTC+8），只统计当天12:00之后的订单
+    // 使用北京时间（UTC+8），只统计当天12:00之后的订单（业务周期从中午12点开始）
     const now = new Date();
     const beijingNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
     const today = beijingNow.toISOString().slice(0, 10);
@@ -37,7 +37,7 @@ export default function DailyRanking({ orders }: DailyRankingProps) {
     const noonBoundary = new Date(`${today}T12:00:00+08:00`);
     
     const todayOrders = orders.filter(o => {
-      // 订单 submittedAt 是UTC时间，转为北京时间
+      // 订单 submittedAt/createdAt 是UTC时间，转为北京时间
       const dateField = (o as any).submittedAt || o.createdAt;
       if (!dateField) return false;
       const orderTime = new Date(new Date(dateField).getTime() + 8 * 60 * 60 * 1000);
@@ -104,6 +104,11 @@ export default function DailyRanking({ orders }: DailyRankingProps) {
 
       {/* 排名卡片 - 横向滚动 */}
       <div className="overflow-x-auto pb-2 scrollbar-hide">
+        {ranking.length === 0 ? (
+          <div className="text-center py-3 text-xs text-[#A08F80] bg-[#FAF5F0] rounded-lg">
+            今日12:00后暂无订单
+          </div>
+        ) : (
         <div className="flex gap-2" style={{ minWidth: 'max-content' }}>
           {ranking.map((item, index) => {
             const isMe = item.csId === myId;
@@ -159,13 +164,8 @@ export default function DailyRanking({ orders }: DailyRankingProps) {
             );
           })}
 
-          {ranking.length === 0 && (
-            <div className="flex-shrink-0 text-[#A08F80] text-sm py-4 px-6 border border-dashed border-[#E8DFD2] rounded-xl">
-              <p>暂无派单记录</p>
-              <p className="text-[10px] mt-1">每天12:00清零</p>
-            </div>
-          )}
         </div>
+        )}
 
         {/* 滚动圆点指示器 */}
         {ranking.length > 2 && (

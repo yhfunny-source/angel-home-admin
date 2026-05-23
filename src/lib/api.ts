@@ -160,14 +160,14 @@ export async function deleteOrder(id: string): Promise<void> {
 }
 
 // 订单补充内容（发消息给派单侠）
-export async function addSupplement(orderId: string, content: string, sender?: { id?: string; name?: string; role?: string }): Promise<Order> {
+export async function addSupplement(orderId: string, content: string, sender?: { id?: string; name?: string; role?: string }): Promise<{ id: string; content: string; createdAt: string }> {
   const body: any = { content };
   if (sender) {
     body.senderId = sender.id;
     body.senderName = sender.name;
     body.senderRole = sender.role;
   }
-  return request<Order>('POST', `/orders/${orderId}/supplement`, body);
+  return request<{ id: string; content: string; createdAt: string }>('POST', `/orders/${orderId}/supplement`, body);
 }
 
 // 评价

@@ -15,6 +15,7 @@ export default function Cockpit() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showOrderDetail, setShowOrderDetail] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+  const [detailView, setDetailView] = useState<'stores' | 'waiters' | 'staff' | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -109,7 +110,7 @@ export default function Cockpit() {
 
             {/* 快捷入口 */}
             <div className="grid grid-cols-3 gap-4">
-              <button onClick={() => navigate('/admin?tab=stores')} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
+              <button onClick={() => setDetailView('stores')} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#C89F7F] to-[#B88F6F] flex items-center justify-center text-xl shadow-md">🏪</div>
                   <div>
@@ -118,7 +119,7 @@ export default function Cockpit() {
                   </div>
                 </div>
               </button>
-              <button onClick={() => navigate('/admin?tab=waiters')} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
+              <button onClick={() => setDetailView('waiters')} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#B88F6F] to-[#A87F5F] flex items-center justify-center text-xl shadow-md">👔</div>
                   <div>
@@ -127,7 +128,7 @@ export default function Cockpit() {
                   </div>
                 </div>
               </button>
-              <button onClick={() => navigate('/admin?tab=staff')} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
+              <button onClick={() => setDetailView('staff')} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#5C7258] to-[#4A5E48] flex items-center justify-center text-xl shadow-md">💬</div>
                   <div>
@@ -137,6 +138,70 @@ export default function Cockpit() {
                 </div>
               </button>
             </div>
+
+            {/* 业绩明细列表 */}
+            {detailView && (
+              <div className="rounded-xl border border-[#E8DFD2] shadow-sm overflow-hidden">
+                <div className="px-5 py-4 border-b border-[#E8DFD2] flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setDetailView(null)} className="text-sm text-[#C89F7F] hover:text-[#A87F5F] font-medium">
+                      ← 返回
+                    </button>
+                    <h3 className="text-sm font-semibold text-[#4A3A2F]">
+                      {detailView === 'stores' ? '🏪 店铺业绩明细' : detailView === 'waiters' ? '👔 服务员业绩明细' : '💬 客服业绩明细'}
+                    </h3>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-[#FAF5F0] text-[#726255]">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-medium">排名</th>
+                        <th className="px-4 py-3 text-left font-medium">名称</th>
+                        <th className="px-4 py-3 text-right font-medium">订单数</th>
+                        <th className="px-4 py-3 text-right font-medium">收入/业绩</th>
+                        {detailView === 'waiters' && <th className="px-4 py-3 text-right font-medium">评分</th>}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {detailView === 'stores' && data.storeStats?.map((s, i) => (
+                        <tr key={s.id} className="hover:bg-[#FAF5F0]">
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${i === 0 ? 'bg-[#FFD700] text-[#8B6914]' : i === 1 ? 'bg-[#C0C0C0] text-[#666]' : i === 2 ? 'bg-[#CD7F32] text-white' : 'bg-[#E8DFD2] text-[#726255]'}`}>{i + 1}</span>
+                          </td>
+                          <td className="px-4 py-3 font-medium text-[#4A3A2F]">{s.name}</td>
+                          <td className="px-4 py-3 text-right">{s.orderCount || 0}</td>
+                          <td className="px-4 py-3 text-right font-medium text-[#C89F7F]">{formatMoney(s.revenue)}</td>
+                        </tr>
+                      ))}
+                      {detailView === 'waiters' && data.waiterStats?.map((w, i) => (
+                        <tr key={w.id} className="hover:bg-[#FAF5F0]">
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${i === 0 ? 'bg-[#FFD700] text-[#8B6914]' : i === 1 ? 'bg-[#C0C0C0] text-[#666]' : i === 2 ? 'bg-[#CD7F32] text-white' : 'bg-[#E8DFD2] text-[#726255]'}`}>{i + 1}</span>
+                          </td>
+                          <td className="px-4 py-3 font-medium text-[#4A3A2F]">{w.name}</td>
+                          <td className="px-4 py-3 text-right">{w.orderCount || 0}</td>
+                          <td className="px-4 py-3 text-right font-medium text-[#C89F7F]">{formatMoney(w.revenue)}</td>
+                          <td className="px-4 py-3 text-right">
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${(w.rating || 5) >= 4.5 ? 'bg-[#DDE5D8] text-[#3D4F3A]' : (w.rating || 5) >= 3 ? 'bg-[#F7EEDB] text-[#A87F5F]' : 'bg-[#F5DCD6] text-[#8C3F30]'}`}>⭐ {w.rating || 5}</span>
+                          </td>
+                        </tr>
+                      ))}
+                      {detailView === 'staff' && data.staffStats?.map((s, i) => (
+                        <tr key={s.id} className="hover:bg-[#FAF5F0]">
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${i === 0 ? 'bg-[#FFD700] text-[#8B6914]' : i === 1 ? 'bg-[#C0C0C0] text-[#666]' : i === 2 ? 'bg-[#CD7F32] text-white' : 'bg-[#E8DFD2] text-[#726255]'}`}>{i + 1}</span>
+                          </td>
+                          <td className="px-4 py-3 font-medium text-[#4A3A2F]">{s.name}</td>
+                          <td className="px-4 py-3 text-right">{s.orderCount || 0}</td>
+                          <td className="px-4 py-3 text-right font-medium text-[#C89F7F]">{s.completedCount || 0} 完成</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* 动态标签 */}
             {data.dynamicTags && data.dynamicTags.length > 0 && (

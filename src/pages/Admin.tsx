@@ -649,6 +649,13 @@ export default function Admin() {
                   <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold text-[#4A3A2F]">订单管理</h2>
                     <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="搜索手机号/客户名/订单号..."
+                        value={orderFilter.search}
+                        onChange={e => setOrderFilter({ ...orderFilter, search: e.target.value })}
+                        className="h-8 text-xs px-3 rounded-lg border border-[#E8DFD2] bg-[#FFFFFF] w-48"
+                      />
                       <select
                         value={orderFilter.status}
                         onChange={e => setOrderFilter({ ...orderFilter, status: e.target.value })}
@@ -670,7 +677,18 @@ export default function Admin() {
                     <div className="text-center py-12 text-[#A08F80] rounded-xl border border-[#E8DFD2] bg-[#FFFFFF]">暂无订单</div>
                   ) : (
                     <div className="space-y-3">
-                      {orders.filter(o => !orderFilter.status || o.status === orderFilter.status).map(order => (
+                      {orders.filter(o => {
+                        const matchStatus = !orderFilter.status || o.status === orderFilter.status;
+                        const kw = orderFilter.search.trim();
+                        const matchSearch = !kw ||
+                          (o.phone && o.phone.includes(kw)) ||
+                          (o.customerName && o.customerName.includes(kw)) ||
+                          (o.orderNo && o.orderNo.includes(kw)) ||
+                          (o.address && o.address.includes(kw)) ||
+                          (o.submittedBy && o.submittedBy.includes(kw)) ||
+                          (o.wechat && o.wechat.includes(kw));
+                        return matchStatus && matchSearch;
+                      }).map(order => (
                         <div key={order.id} className="bg-[#FFFFFF] rounded-xl border border-[#E8DFD2] shadow-sm p-4">
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2 flex-wrap">
