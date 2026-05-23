@@ -18,7 +18,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ruinxuji-huimiejihua-2026-secret-k
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || 'angel_home_2024',
+  password: process.env.DB_PASSWORD || '123456',
   database: process.env.DB_NAME || 'angel_home',
   waitForConnections: true,
   connectionLimit: 10,
@@ -631,7 +631,7 @@ app.get('/api/orders', authMiddleware, async (req, res) => {
       params.push(status);
     }
     if (date) {
-      sql += ' AND DATE(created_at) = ?';
+      sql += ' AND DATE(submitted_at) = ?';
       params.push(date);
     }
     // myOrders：客服只看自己的单
@@ -644,7 +644,7 @@ app.get('/api/orders', authMiddleware, async (req, res) => {
     if (dispatcherView === 'true') {
       sql += ' AND status IN ("pending", "assigned", "departed", "arrived", "serving")';
     }
-    sql += ' ORDER BY created_at DESC';
+    sql += ' ORDER BY submitted_at DESC';
     const [rows] = await pool.execute(sql, params);
     // 获取所有订单ID，查询 supplements 独立表
     const orderIds = rows.map(r => r.id).filter(Boolean);
@@ -660,9 +660,10 @@ app.get('/api/orders', authMiddleware, async (req, res) => {
         supplementMap[s.order_id].push({
           id: s.id,
           content: s.content,
-          createdBy: s.created_by,
-          createdAt: s.created_at,
-          authorName: s.author_name
+          createdBy: s.sender_id,
+          senderName: s.sender_name,
+          senderRole: s.sender_role,
+          createdAt: s.created_at
         });
       }
     }
@@ -759,19 +760,15 @@ app.post('/api/orders', authMiddleware, async (req, res) => {
       console.log('[CUSTOMER MATCH] 无三要素，跳过客户匹配');
     }
 
-    // ========== 创建订单 ==========
+    // ========== 创建订单（兼容旧表结构） ==========
     await pool.execute(
-      `INSERT INTO orders (id, order_no, customer_name, phone, wechat, qq, address, location,
-       preferences, notes, info_fee, prepay_amount, status, store_id, store_name,
-       staff_id, staff_name, submitter_id, submitted_by, reference_photo, customer_type, history_count, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [id, finalOrderNo, customerName || null, phone || null, wechat || null, qq || null,
+      `INSERT INTO orders (id, customer_name, phone, wechat, qq, address, location,
+       notes, info_fee, status, store_id, submitter_id, submitted_by, submitted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [id, customerName || null, phone || null, wechat || null, qq || null,
        address || null, location || null,
-       preferences ? JSON.stringify(preferences) : null,
-       notes || null, infoFee || 0, prepayAmount || 0, status || 'pending',
-       storeId || null, storeName || null, staffId || null, staffName || null,
-       submitterId || req.userId, submittedBy || null, referencePhoto || null,
-       isOldCustomer ? 'old' : 'new', matchedCustomer ? (matchedCustomer.order_count + 1) : 1]
+       notes || null, infoFee || 0, status || 'submitted',
+       storeId || null, submitterId || req.userId, submittedBy || null]
     );
 
     // ========== 记录客户服务 ==========
@@ -1166,7 +1163,7 @@ app.post('/api/customer-services', authMiddleware, async (req, res) => {
 app.post('/api/customers/sync-from-orders', authMiddleware, async (req, res) => {
   try {
     const [rows] = await pool.execute(
-      'SELECT * FROM orders WHERE status IN ("completed", "rated") AND phone IS NOT NULL ORDER BY created_at ASC'
+      'SELECT * FROM orders WHERE status IN ("completed", "rated") AND phone IS NOT NULL ORDER BY submitted_at ASC'
     );
     let created = 0, updated = 0;
     for (const order of rows) {
@@ -1180,13 +1177,13 @@ app.post('/api/customers/sync-from-orders', authMiddleware, async (req, res) => 
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
           [cid, order.customer_name || null, phone, order.wechat || null, order.qq || null,
            order.store_id || null, order.store_name || null, order.submitter_id || null, order.submitted_by || null,
-           order.info_fee || 0, order.created_at, order.created_at]
+           order.info_fee || 0, order.submitted_at, order.submitted_at]
         );
         created++;
       } else {
         await pool.execute(
           'UPDATE customers SET order_count = order_count + 1, total_spend = total_spend + ?, last_contact_date = ? WHERE id = ?',
-          [order.info_fee || 0, order.created_at, exist[0].id]
+          [order.info_fee || 0, order.submitted_at, exist[0].id]
         );
         updated++;
       }
@@ -1240,7 +1237,7 @@ app.get('/api/cockpit', authMiddleware, async (req, res) => {
 
     // 最近订单
     const [recentOrders] = await pool.execute(
-      'SELECT * FROM orders ORDER BY created_at DESC LIMIT 20'
+      'SELECT * FROM orders ORDER BY submitted_at DESC LIMIT 20'
     );
 
     // 门店统计
