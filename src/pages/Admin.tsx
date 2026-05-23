@@ -164,7 +164,7 @@ export default function Admin() {
   const saveForm = async () => {
     try {
       console.log('saveForm type:', formType, 'editId:', editId, 'formData:', formData);
-      if (!formData.name || !formData.name.trim()) {
+      if (formType !== 'user' && (!formData.name || !formData.name.trim())) {
         toast.error('请填写姓名/名称'); return;
       }
       if (formType === 'user') {
@@ -968,7 +968,7 @@ export default function Admin() {
                 {formType === 'user' ? (
                   <>
                     <div><label className="text-sm text-[#726255]">用户名</label><Input value={formData.username || ''} onChange={e => setFormData({ ...formData, username: e.target.value })} placeholder="登录用户名" /></div>
-                    <div><label className="text-sm text-[#726255]">姓名</label><Input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="真实姓名" /></div>
+                    <div><label className="text-sm text-[#726255]">姓名（可选）</label><Input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="真实姓名" /></div>
                     <div><label className="text-sm text-[#726255]">手机</label><Input value={formData.phone || ''} onChange={e => setFormData({ ...formData, phone: e.target.value })} placeholder="手机号" /></div>
                     <div>
                       <label className="text-sm text-[#726255]">登录密码{editId ? '（留空则不修改）' : ''}</label>

@@ -402,7 +402,7 @@ app.post('/api/users', authMiddleware, async (req, res) => {
     await pool.execute(
       `INSERT INTO users (id, username, password, name, roles, phone, store_id, store_name, store_ids, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, username, hashed, name, JSON.stringify(roles || ['客服']), phone || null, storeId || null, storeName || null,
+      [id, username, hashed, name || null, JSON.stringify(roles || ['客服']), phone || null, storeId || null, storeName || null,
        JSON.stringify(storeIds || []), status || 'active']
     );
     res.json(success({ id, username, name, roles: roles || ['客服'] }));
@@ -646,9 +646,32 @@ app.get('/api/orders', authMiddleware, async (req, res) => {
     }
     sql += ' ORDER BY created_at DESC';
     const [rows] = await pool.execute(sql, params);
+    // 获取所有订单ID，查询 supplements 独立表
+    const orderIds = rows.map(r => r.id).filter(Boolean);
+    let supplementMap = {};
+    if (orderIds.length > 0) {
+      const placeholders = orderIds.map(() => '?').join(',');
+      const [suppRows] = await pool.execute(
+        `SELECT * FROM supplements WHERE order_id IN (${placeholders}) ORDER BY created_at ASC`,
+        orderIds
+      );
+      for (const s of suppRows) {
+        if (!supplementMap[s.order_id]) supplementMap[s.order_id] = [];
+        supplementMap[s.order_id].push({
+          id: s.id,
+          content: s.content,
+          createdBy: s.created_by,
+          createdAt: s.created_at,
+          authorName: s.author_name
+        });
+      }
+    }
     const orders = rows.map(r => {
       const o = camelizeRow(r);
-      o.supplements = r.supplements ? JSON.parse(r.supplements) : [];
+      // 合并 orders 表 JSON 字段 + supplements 独立表数据
+      const jsonSupplements = r.supplements ? JSON.parse(r.supplements) : [];
+      const dbSupplements = supplementMap[r.id] || [];
+      o.supplements = [...jsonSupplements, ...dbSupplements];
       o.preferences = r.preferences ? JSON.parse(r.preferences) : [];
       o.customerType = r.customer_type;
       o.historyCount = r.history_count;
@@ -743,7 +766,7 @@ app.post('/api/orders', authMiddleware, async (req, res) => {
        staff_id, staff_name, submitter_id, submitted_by, reference_photo, customer_type, history_count, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [id, finalOrderNo, customerName || null, phone || null, wechat || null, qq || null,
-       address, location || null,
+       address || null, location || null,
        preferences ? JSON.stringify(preferences) : null,
        notes || null, infoFee || 0, prepayAmount || 0, status || 'pending',
        storeId || null, storeName || null, staffId || null, staffName || null,
@@ -1227,10 +1250,13 @@ app.get('/api/cockpit', authMiddleware, async (req, res) => {
       WHERE s.status = 'active' GROUP BY s.id ORDER BY orderCount DESC
     `);
 
-    // 服务员统计
+    // 服务员统计 - 动态统计已完成订单数
     const [waiterStats] = await pool.execute(`
-      SELECT id, name, total_reviews as orderCount, rating
-      FROM waiters WHERE status = 'active' ORDER BY total_reviews DESC LIMIT 20
+      SELECT w.id, w.name, w.rating,
+             COUNT(o.id) as orderCount
+      FROM waiters w LEFT JOIN orders o ON w.id = o.waiter_id AND o.status IN ('completed','rated')
+      WHERE w.status = 'active'
+      GROUP BY w.id ORDER BY orderCount DESC LIMIT 20
     `);
 
     // 客服统计
@@ -1254,7 +1280,7 @@ app.get('/api/cockpit', authMiddleware, async (req, res) => {
       kpi,
       recentOrders: recentOrders.map(camelizeRow),
       storeStats,
-      waiterStats: waiterStats.map(w => ({ id: w.id, name: w.name, orderCount: w.orderCount || 0, revenue: 0, rating: w.rating })),
+      waiterStats: waiterStats.map(w => ({ id: w.id, name: w.name, orderCount: w.orderCount || 0, revenue: 0, rating: w.rating || 5.0 })),
       staffStats,
       dynamicTags: [],
     }));
