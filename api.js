@@ -47,6 +47,19 @@ function camelizeRow(row) {
   return result;
 }
 
+// 安全解析 JSON，处理脏数据如 "[object Object]"
+function safeJsonParse(str, defaultValue) {
+  if (!str || str === 'null' || str === 'undefined') return defaultValue;
+  if (typeof str === 'object') return str; // 已经是对象
+  const trimmed = String(str).trim();
+  if (trimmed === '' || trimmed === '[object Object]') return defaultValue;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return defaultValue;
+  }
+}
+
 // JWT 认证中间件
 function authMiddleware(req, res, next) {
   try {
@@ -357,19 +370,41 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json(error('用户名或密码错误'));
     }
     const user = rows[0];
-    const valid = await bcrypt.compare(password, user.password);
+    // 兼容旧表 password_hash 字段和新表 password 字段
+    const passwordField = user.password || user.password_hash;
+    const valid = await bcrypt.compare(password, passwordField);
     if (!valid) {
       return res.status(401).json(error('用户名或密码错误'));
     }
+    // 兼容旧表 roles 字段（可能是 JSON 字符串或逗号分隔字符串）
+    let roles = [];
+    try {
+      roles = JSON.parse(user.roles || '[]');
+    } catch {
+      // 旧表 roles 可能是逗号分隔的字符串
+      roles = (user.roles || '').split(',').map(r => r.trim()).filter(Boolean);
+    }
     const token = jwt.sign(
-      { id: user.id, username: user.username, role: JSON.parse(user.roles || '[]')[0] || '客服' },
+      { id: user.id, username: user.username, role: roles[0] || '客服' },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
     const userData = camelizeRow(user);
-    userData.roles = JSON.parse(user.roles || '[]');
-    userData.storeIds = user.store_ids ? JSON.parse(user.store_ids) : [];
+    userData.roles = roles;
+    // 兼容旧表 store_ids（JSON 或逗号分隔）
+    let storeIds = [];
+    try {
+      storeIds = user.store_ids ? JSON.parse(user.store_ids) : [];
+    } catch {
+      storeIds = (user.store_ids || '').split(',').map(s => s.trim()).filter(Boolean);
+    }
+    userData.storeIds = storeIds;
+    // 兼容旧表 store_id 单字段
+    if (user.store_id && storeIds.length === 0) {
+      userData.storeIds = [user.store_id];
+    }
     delete userData.password;
+    delete userData.passwordHash;
     res.json(success({ ...userData, token }));
   } catch (err) {
     console.error('[LOGIN ERROR]', err);
@@ -383,9 +418,14 @@ app.get('/api/users', authMiddleware, async (req, res) => {
     const [rows] = await pool.execute('SELECT * FROM users ORDER BY created_at DESC');
     const users = rows.map(r => {
       const u = camelizeRow(r);
-      u.roles = JSON.parse(r.roles || '[]');
-      u.storeIds = r.store_ids ? JSON.parse(r.store_ids) : [];
+      // 兼容旧表 roles（JSON 或逗号分隔字符串）
+      try { u.roles = JSON.parse(r.roles || '[]'); } catch { u.roles = (r.roles || '').split(',').map(x => x.trim()).filter(Boolean); }
+      // 兼容旧表 store_ids
+      try { u.storeIds = r.store_ids ? JSON.parse(r.store_ids) : []; } catch { u.storeIds = (r.store_ids || '').split(',').map(x => x.trim()).filter(Boolean); }
+      // 兼容旧表 store_id 单字段
+      if (r.store_id && u.storeIds.length === 0) u.storeIds = [r.store_id];
       delete u.password;
+      delete u.passwordHash;
       return u;
     });
     res.json(success(users));
@@ -447,7 +487,7 @@ app.get('/api/staff', authMiddleware, async (req, res) => {
     const [rows] = await pool.execute('SELECT * FROM staff ORDER BY created_at DESC');
     const staff = rows.map(r => {
       const s = camelizeRow(r);
-      s.storeIds = r.store_ids ? JSON.parse(r.store_ids) : [];
+      s.storeIds = safeJsonParse(r.store_ids, []);
       return s;
     });
     res.json(success(staff));
@@ -504,7 +544,7 @@ app.get('/api/waiters', authMiddleware, async (req, res) => {
     const [rows] = await pool.execute('SELECT * FROM waiters ORDER BY created_at DESC');
     const waiters = rows.map(r => {
       const w = camelizeRow(r);
-      w.tags = r.tags ? JSON.parse(r.tags) : [];
+      w.tags = safeJsonParse(r.tags, []);
       return w;
     });
     res.json(success(waiters));
@@ -670,10 +710,11 @@ app.get('/api/orders', authMiddleware, async (req, res) => {
     const orders = rows.map(r => {
       const o = camelizeRow(r);
       // 合并 orders 表 JSON 字段 + supplements 独立表数据
-      const jsonSupplements = r.supplements ? JSON.parse(r.supplements) : [];
+      const jsonSupplements = safeJsonParse(r.supplements, []);
       const dbSupplements = supplementMap[r.id] || [];
       o.supplements = [...jsonSupplements, ...dbSupplements];
-      o.preferences = r.preferences ? JSON.parse(r.preferences) : [];
+      o.preferences = safeJsonParse(r.preferences, []);
+      o.prepayments = safeJsonParse(r.prepayments, []);
       o.customerType = r.customer_type;
       o.historyCount = r.history_count;
       return o;
@@ -690,8 +731,9 @@ app.get('/api/orders/:id', authMiddleware, async (req, res) => {
     const [rows] = await pool.execute('SELECT * FROM orders WHERE id = ?', [req.params.id]);
     if (rows.length === 0) return res.status(404).json(error('订单不存在'));
     const o = camelizeRow(rows[0]);
-    o.supplements = rows[0].supplements ? JSON.parse(rows[0].supplements) : [];
-    o.preferences = rows[0].preferences ? JSON.parse(rows[0].preferences) : [];
+    o.supplements = safeJsonParse(rows[0].supplements, []);
+    o.preferences = safeJsonParse(rows[0].preferences, []);
+    o.prepayments = safeJsonParse(rows[0].prepayments, []);
     o.customerType = rows[0].customer_type;
     o.historyCount = rows[0].history_count;
     res.json(success(o));
@@ -1054,7 +1096,7 @@ app.get('/api/customers/search', authMiddleware, async (req, res) => {
     const [rows] = await pool.execute(sql, params);
     const customers = rows.map(r => {
       const c = camelizeRow(r);
-      c.tags = r.tags ? JSON.parse(r.tags) : [];
+      c.tags = safeJsonParse(r.tags, []);
       return c;
     });
     res.json(success(customers));
@@ -1082,7 +1124,7 @@ app.get('/api/customers', authMiddleware, async (req, res) => {
     const [countRows] = await pool.execute('SELECT COUNT(*) as total FROM customers WHERE 1=1' + (search ? ' AND (name LIKE ? OR phone LIKE ? OR wechat LIKE ?)' : ''), search ? [`%${search}%`, `%${search}%`, `%${search}%`] : []);
     const customers = rows.map(r => {
       const c = camelizeRow(r);
-      c.tags = r.tags ? JSON.parse(r.tags) : [];
+      c.tags = safeJsonParse(r.tags, []);
       return c;
     });
     res.json(success({ list: customers, total: countRows[0].total }));
