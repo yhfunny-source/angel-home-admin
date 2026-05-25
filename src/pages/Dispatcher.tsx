@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useOrderNotification } from '@/hooks/useOrderNotification';
+import { playNotificationSound, detectOrderChanges } from '@/hooks/useOrderNotification';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
@@ -83,13 +83,30 @@ export default function Dispatcher() {
         getWaiters().catch(() => []),
       ]);
 
-      // 检测新订单通知
+      // 检测订单变化
       const prev = prevOrdersRef.current;
       if (prev.length > 0) {
-        const newOrders = o.filter((order: Order) => !prev.find(p => p.id === order.id));
-        newOrders.forEach((order: Order) => {
-          toast.info(`📋 新订单 - ${order.customerName || '匿名'} · ${order.address?.substring(0, 20)}...`, { duration: 5000 });
-        });
+        const { newOrders, statusChanges } = detectOrderChanges(prev, o);
+
+        // 新订单 → 派单侠需要声音提醒（可能没关注屏幕）
+        if (newOrders.length > 0) {
+          newOrders.forEach((order: Order) => {
+            toast.info(`📋 新订单 - ${order.customerName || '匿名'} · ${order.address?.substring(0, 20) || ''} · ${order.storeName || ''}`, { duration: 5000 });
+          });
+          playNotificationSound();
+        }
+
+        // 状态变化 → 派单侠自己操作的，不需要声音，只 toast 提示
+        if (statusChanges.length > 0) {
+          const sLabels: Record<string, string> = {
+            pending: '待派单', assigned: '已派单', departed: '已出发', arrived: '已到达',
+            serving: '服务中', completed: '已完成', rated: '已评价', rejected: '被退', cancelled: '彻底失败',
+          };
+          statusChanges.forEach(c => {
+            toast.info(`📊 ${c.order.customerName || '匿名'} [${sLabels[c.oldStatus] || c.oldStatus}] → [${sLabels[c.newStatus] || c.newStatus}]`, { duration: 4000 });
+          });
+          // 注意：不播放声音，因为是派单侠自己操作的
+        }
 
         // 检测补充内容
         o.forEach((order: Order) => {
@@ -129,20 +146,6 @@ export default function Dispatcher() {
     return () => clearInterval(timer);
   }, []);
 
-  // 订单状态变化通知 - 提示音(6秒) + 弹窗
-  useOrderNotification(orders, (order, oldStatus, newStatus) => {
-    const sLabels: Record<string, string> = {
-      pending: '待派单', assigned: '已派单', departed: '已出发', arrived: '已到达',
-      serving: '服务中', completed: '已完成', rated: '已评价', rejected: '被退', cancelled: '彻底失败',
-    };
-    // 派单侠只关注与自己相关的订单
-    if (order.dispatcherId === user?.id || !order.dispatcherId) {
-      toast.info(`订单状态变化：${order.customerName || '匿名客户'} [${sLabels[oldStatus] || oldStatus}] → [${sLabels[newStatus] || newStatus}]`, {
-        duration: 6000,
-      });
-    }
-  });
-
   // 过滤
   const pendingOrders = orders.filter(o => o.status === 'pending');
   const activeOrders = orders.filter(o => ['assigned', 'departed', 'arrived', 'serving'].includes(o.status));
@@ -161,14 +164,15 @@ export default function Dispatcher() {
     setAssignWaiterId('');
     setCustomerHistory(null);
     setShowAssign(true);
-    // 搜索客户历史消费和服务记录
+    // 搜索客户历史消费和服务记录 - 三要素同时匹配（手机/微信/QQ）
     if (order.phone || order.wechat || order.qq) {
       setLoadingHistory(true);
       try {
+        // 同时传入所有三要素，后端用 OR 匹配，确保准确
         const params: any = {};
-        if (order.phone) params.phone = order.phone;
-        else if (order.wechat) params.wechat = order.wechat;
-        else if (order.qq) params.qq = order.qq;
+        if (order.phone && String(order.phone).trim().length >= 7) params.phone = order.phone;
+        if (order.wechat && String(order.wechat).trim().length >= 3) params.wechat = order.wechat;
+        if (order.qq && String(order.qq).trim().length >= 4) params.qq = order.qq;
         const results = await searchCustomers(params);
         if (results && results.length > 0) {
           // 获取完整的客户详情（包含历史服务记录和服务员）
@@ -454,8 +458,8 @@ export default function Dispatcher() {
                         <Badge variant="outline" className="text-xs bg-[#F0E8DF] text-[#6B4A38] border-[#D8CBC0]">{order.storeName}</Badge>
                       )}
                     </div>
-                    <div className="grid grid-cols-3 gap-4 text-sm">
-                      <div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                      <div className="flex items-center">
                         <span className="text-[#A08F80]">客户:</span>
                         <span className="ml-1 font-medium">{order.customerName || '匿名'}</span>
                       </div>
@@ -466,7 +470,7 @@ export default function Dispatcher() {
                           <button onClick={() => copyToClipboard(order.phone!)} className="ml-1 text-[#C89F7F] hover:text-[#A87F5F] text-xs">📋</button>
                         )}
                       </div>
-                      <div>
+                      <div className="flex items-center">
                         <span className="text-[#A08F80]">信息费:</span>
                         <span className="ml-1 font-medium">¥{order.infoFee}</span>
                       </div>
@@ -575,8 +579,8 @@ export default function Dispatcher() {
 
       {/* 派单弹窗 */}
       {showAssign && selectedOrder && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowAssign(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full mx-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowAssign(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full mx-4" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">选择服务员</h3>
               {/* 客户历史消费 */}
@@ -623,8 +627,19 @@ export default function Dispatcher() {
                       </div>
                     </div>
                   )}
-                  {customerHistory.sourceCsName && (
-                    <p className="text-xs text-[#94724A]">历史客服: {customerHistory.sourceCsName}</p>
+                  {/* 历史消费明细 - 每次消费记录 */}
+                  {(customerHistory as any)?.services && ((customerHistory as any).services as CustomerService[]).length > 0 && (
+                    <div className="mt-2 space-y-1.5 max-h-28 overflow-y-auto">
+                      <p className="text-xs text-[#94724A] font-medium">📋 历史消费记录</p>
+                      {((customerHistory as any).services as CustomerService[]).map((svc: CustomerService, idx: number) => (
+                        <div key={svc.id || idx} className="flex items-center gap-2 text-xs p-1.5 bg-white/50 rounded">
+                          <span className="text-[#A08F80] shrink-0">{svc.serviceDate?.slice(5) || '--'}</span>
+                          <span className="text-[#4A3A2F] font-medium">👤{svc.csName || '-'}</span>
+                          <span className="text-[#A87F5F]">💁{svc.waiterName || '-'}</span>
+                          <span className="text-[#C89F7F] font-semibold ml-auto">¥{svc.infoFee || 0}</span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               ) : (
@@ -680,8 +695,8 @@ export default function Dispatcher() {
 
       {/* 被退弹窗 */}
       {showReject && selectedOrder && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowReject(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowReject(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-2">↩️ 订单被退</h3>
               <p className="text-sm text-[#A08F80] mb-4">客户: {selectedOrder.customerName || '匿名'}</p>
@@ -715,8 +730,8 @@ export default function Dispatcher() {
 
       {/* 完成弹窗 */}
       {showComplete && selectedOrder && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowComplete(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowComplete(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">完成订单 & 录入业绩</h3>
               <p className="text-sm text-[#A08F80] mb-4">客户: {selectedOrder.customerName || '匿名'}</p>
@@ -755,8 +770,8 @@ export default function Dispatcher() {
 
       {/* 评价弹窗 */}
       {showReview && selectedOrder && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowReview(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowReview(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-2">评价服务员</h3>
               <p className="text-sm text-[#A08F80] mb-4">{selectedOrder.waiterName}</p>
@@ -812,8 +827,8 @@ export default function Dispatcher() {
 
       {/* 详情弹窗 */}
       {showDetail && selectedOrder && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowDetail(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onMouseDown={() => setShowDetail(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full max-h-[80vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-[#4A3A2F]">订单详情</h3>

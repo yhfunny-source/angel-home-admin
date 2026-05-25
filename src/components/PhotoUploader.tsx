@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { toast } from 'sonner';
+import { storage } from '@/lib/storage';
 
 interface Props {
   onUpload: (url: string) => void;
@@ -38,9 +39,9 @@ export default function PhotoUploader({ onUpload, existingUrl }: Props) {
       const formData = new FormData();
       formData.append('photo', file);
 
-      // 获取认证头
+      // 获取认证头 - 使用统一 storage 工具
       const headers: Record<string, string> = {};
-      const token = localStorage.getItem('token');
+      const token = storage.get('token');
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
       const res = await fetch('/api/upload/photo', {
@@ -50,7 +51,7 @@ export default function PhotoUploader({ onUpload, existingUrl }: Props) {
       });
 
       const data = await res.json();
-      if (!data.success) throw new Error(data.error || '上传失败');
+      if (!data.success) throw new Error(data.message || '上传失败');
 
       onUpload(data.data.url);
       toast.success('图片上传成功');

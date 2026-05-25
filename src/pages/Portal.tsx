@@ -1,25 +1,26 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { storage } from '@/lib/storage';
-import type { UserRole } from '@/types';
+import { getMyPermissions } from '@/lib/api';
 
 interface PortalItem {
   label: string;
   path: string;
   icon: string;
   desc: string;
-  roles: UserRole[];
+  moduleKey: string;
   color: string;
 }
 
-const portals: PortalItem[] = [
+const ALL_PORTALS: PortalItem[] = [
   {
     label: '客服工作台',
     path: '/send-order',
     icon: '💬',
     desc: '发单、补充内容、评价',
-    roles: ['客服', 'BOSS', '经理'],
+    moduleKey: 'send-order',
     color: 'from-[#C89F7F] to-[#B88F6F]',
   },
   {
@@ -27,7 +28,7 @@ const portals: PortalItem[] = [
     path: '/dispatcher',
     icon: '📋',
     desc: '接单、派单、评价',
-    roles: ['派单侠', 'BOSS', '经理'],
+    moduleKey: 'dispatcher',
     color: 'from-[#5C7258] to-[#4A5E48]',
   },
   {
@@ -35,7 +36,7 @@ const portals: PortalItem[] = [
     path: '/admin',
     icon: '⚙️',
     desc: '用户、门店、人员管理',
-    roles: ['BOSS', '经理', '数据督导'],
+    moduleKey: 'admin',
     color: 'from-[#8C6A53] to-[#7A5C48]',
   },
   {
@@ -43,95 +44,127 @@ const portals: PortalItem[] = [
     path: '/cockpit',
     icon: '👑',
     desc: '业绩总览、数据分析',
-    roles: ['BOSS'],
+    moduleKey: 'cockpit',
     color: 'from-[#C89F7F] to-[#B88F6F]',
+  },
+  {
+    label: '咨询数据',
+    path: '/consult-data',
+    icon: '📊',
+    desc: '咨询量、回复率统计',
+    moduleKey: 'consult-data',
+    color: 'from-[#B88F6F] to-[#A87F5F]',
+  },
+  {
+    label: '人力资源',
+    path: '/hr',
+    icon: '👔',
+    desc: '招聘、离职、考勤、资产',
+    moduleKey: 'hr',
+    color: 'from-[#5C7258] to-[#4A5E48]',
+  },
+  {
+    label: '废墟知识库',
+    path: '/knowledge',
+    icon: '📚',
+    desc: '业务学习、能力提升',
+    moduleKey: 'knowledge',
+    color: 'from-[#8C6A53] to-[#7A5C48]',
+  },
+  {
+    label: '客户资产',
+    path: '/customers',
+    icon: '👥',
+    desc: '客户管理、历史记录',
+    moduleKey: 'customers',
+    color: 'from-[#B88F6F] to-[#A87F5F]',
   },
 ];
 
 export default function Portal() {
   const navigate = useNavigate();
-  const userStr = storage.get('user');
-  const user = userStr ? JSON.parse(userStr) : null;
+  const user = storage.get('user') ? JSON.parse(storage.get('user')!) : null;
+  const [permissions, setPermissions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  if (!user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-[#A08F80] mb-4">请先登录</p>
-          <Button onClick={() => navigate('/login')}>去登录</Button>
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    getMyPermissions()
+      .then(mods => { setPermissions(mods); })
+      .catch(() => { setPermissions([]); })
+      .finally(() => { setLoading(false); });
+  }, []);
+
+  const visiblePortals = permissions.length > 0
+    ? ALL_PORTALS.filter(p => permissions.includes(p.moduleKey))
+    : [];
 
   const handleLogout = () => {
     storage.remove('token');
     storage.remove('user');
     toast.success('已退出登录');
-    navigate('/login');
+    navigate('/');
   };
 
-  const roles: UserRole[] = user.roles || [];
-  const isBoss = roles.includes('BOSS');
-
-  const filtered = portals.filter(p => {
-    if (isBoss) return true;
-    return p.roles.some(r => roles.includes(r));
-  });
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#FAF5F0' }}>
+        <div className="w-10 h-10 border-4 border-[#C89F7F] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#FAF5F0' }}>
       {/* Header */}
-      <div className="border-b" style={{ backgroundColor: '#FFFFFF', borderColor: '#E8DFD2' }}>
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #C89F7F, #B88F6F)' }}>
-              <span className="text-white font-bold text-sm">A</span>
-            </div>
-            <span className="font-semibold" style={{ color: '#4A3A2F' }}>废墟计划</span>
-          </div>
+      <header className="border-b" style={{ backgroundColor: '#FFFFFF', borderColor: '#E8DFD2' }}>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <span className="text-sm" style={{ color: '#726255' }}>
-              {user.name || user.username}
-              <span className="ml-2 text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#F5EFE6', color: '#726255' }}>{roles.join(', ')}</span>
-            </span>
-            <Button variant="outline" size="sm" onClick={handleLogout} style={{ color: '#726255', borderColor: '#E8DFD2' }}>
-              退出
-            </Button>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #C89F7F, #B88F6F)' }}>
+              <span className="text-white text-xl">🏠</span>
+            </div>
+            <div>
+              <h1 className="text-lg font-bold" style={{ color: '#4A3A2F' }}>废墟计划</h1>
+              <p className="text-xs" style={{ color: '#A08F80' }}>欢迎回来，{user?.name || user?.username || '用户'}</p>
+            </div>
           </div>
+          <Button variant="outline" size="sm" onClick={handleLogout} style={{ color: '#726255', borderColor: '#E8DFD2' }}>
+            退出登录
+          </Button>
         </div>
-      </div>
+      </header>
 
-      {/* Content */}
-      <div className="max-w-6xl mx-auto px-4 py-12">
-        <div className="text-center mb-12">
-          <h1 className="text-3xl font-bold mb-2" style={{ color: '#4A3A2F' }}>工作台</h1>
-          <p style={{ color: '#A08F80' }}>选择你要进入的模块</p>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {filtered.map(item => (
-            <button
-              key={item.path}
-              onClick={() => navigate(item.path)}
-              className="group rounded-2xl p-6 transition-all text-left"
-              style={{ backgroundColor: '#FFFFFF', boxShadow: '0 1px 4px rgba(44,62,80,0.06)', border: '1px solid #E8DFD2' }}
-            >
-              <div className={`w-14 h-14 rounded-xl bg-gradient-to-br ${item.color} flex items-center justify-center mb-4 shadow-md group-hover:scale-110 transition-transform`}>
-                <span className="text-2xl">{item.icon}</span>
-              </div>
-              <h3 className="text-lg font-semibold mb-1" style={{ color: '#4A3A2F' }}>{item.label}</h3>
-              <p className="text-sm" style={{ color: '#A08F80' }}>{item.desc}</p>
-              <div className="mt-4 flex gap-1 flex-wrap">
-                {item.roles.map(r => (
-                  <span key={r} className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: '#F5EFE6', color: '#726255' }}>
-                    {r}
-                  </span>
-                ))}
-              </div>
-            </button>
-          ))}
-        </div>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+        {visiblePortals.length === 0 ? (
+          <div className="text-center py-20">
+            <p className="text-4xl mb-4">🔒</p>
+            <h2 className="text-lg font-semibold text-[#4A3A2F] mb-2">暂无访问权限</h2>
+            <p className="text-sm text-[#A08F80]">请联系管理员为您分配模块权限</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {visiblePortals.map(portal => (
+              <button
+                key={portal.path}
+                onClick={() => navigate(portal.path)}
+                className="rounded-xl border p-5 text-left transition-all hover:shadow-md bg-white"
+                style={{ borderColor: '#E8DFD2' }}
+              >
+                <div className="flex items-start gap-4">
+                  <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${portal.color} flex items-center justify-center text-2xl shadow-md shrink-0`}>
+                    {portal.icon}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-base font-semibold mb-1" style={{ color: '#4A3A2F' }}>{portal.label}</h3>
+                    <p className="text-sm" style={{ color: '#A08F80' }}>{portal.desc}</p>
+                  </div>
+                  <svg className="w-5 h-5 mt-1" style={{ color: '#C89F7F' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

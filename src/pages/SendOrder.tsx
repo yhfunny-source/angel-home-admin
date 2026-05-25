@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useOrderNotification } from '@/hooks/useOrderNotification';
+import { playNotificationSound, detectOrderChanges } from '@/hooks/useOrderNotification';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -19,6 +19,9 @@ import type { Order, Store, OrderPreferences } from '@/types';
 import PasswordChangeDialog from '@/components/PasswordChangeDialog';
 import DailyCheckInDialog from '@/components/DailyCheckInDialog';
 import DailyRanking from '@/components/DailyRanking';
+import DailyQuote from '@/components/DailyQuote';
+import CSPerformance from '@/components/CSPerformance';
+import OrderTimeline from '@/components/OrderTimeline';
 import SmartPasteParser from '@/components/SmartPasteParser';
 import PhotoUploader from '@/components/PhotoUploader';
 import { getDailyRecords } from '@/lib/api';
@@ -68,6 +71,7 @@ export default function SendOrder() {
   const [showDetail, setShowDetail] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [showDailyCheckIn, setShowDailyCheckIn] = useState(false);
+  const [showCSPerformance, setShowCSPerformance] = useState(false);
   const [todayRecord, setTodayRecord] = useState<any>(null);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [orderMessages, setOrderMessages] = useState<any[]>([]);
@@ -119,9 +123,26 @@ export default function SendOrder() {
       ]);
       console.log('loadData: got orders:', o?.length, o?.slice(0, 1));
 
-      // 检测新补充内容
       const prev = prevOrdersRef.current;
+
+      // 检测订单状态变化（派单侠操作了）→ 客服需要声音提醒
       if (prev.length > 0 && o.length > 0) {
+        const { statusChanges } = detectOrderChanges(prev, o);
+        const myChanges = statusChanges.filter(c => c.order.submitterId === user?.id);
+        if (myChanges.length > 0) {
+          const sLabels: Record<string, string> = {
+            pending: '待派单', assigned: '已派单', departed: '已出发', arrived: '已到达',
+            serving: '服务中', completed: '已完成', rated: '已评价', rejected: '被退', cancelled: '彻底失败',
+          };
+          myChanges.forEach(c => {
+            toast.info(`📢 ${c.order.customerName || '匿名'} [${sLabels[c.oldStatus] || c.oldStatus}] → [${sLabels[c.newStatus] || c.newStatus}]`, {
+              duration: 6000,
+            });
+          });
+          playNotificationSound();
+        }
+
+        // 检测新补充内容
         o.forEach(order => {
           const prevOrder = prev.find(p => p.id === order.id);
           if (prevOrder) {
@@ -170,20 +191,6 @@ export default function SendOrder() {
     return () => clearInterval(timer);
   }, []);
 
-  // 订单状态变化通知 - 提示音(6秒) + 弹窗
-  useOrderNotification(orders, (order, oldStatus, newStatus) => {
-    const sLabels: Record<string, string> = {
-      pending: '待派单', assigned: '已派单', departed: '已出发', arrived: '已到达',
-      serving: '服务中', completed: '已完成', rated: '已评价', rejected: '被退', cancelled: '彻底失败',
-    };
-    // 只提示与自己相关的订单
-    if (order.submitterId === user?.id) {
-      toast.info(`订单状态变化：${order.customerName || '匿名客户'} [${sLabels[oldStatus] || oldStatus}] → [${sLabels[newStatus] || newStatus}]`, {
-        duration: 6000,
-      });
-    }
-  });
-
   // 过滤订单
   const filteredOrders = orders.filter(o => {
     if (activeTab === 'pending') return o.status === 'pending';
@@ -201,10 +208,6 @@ export default function SendOrder() {
       toast.error('请填写服务地址');
       return;
     }
-    if (!storeId) {
-      toast.error('请选择门店');
-      return;
-    }
 
     try {
       // 使用用户绑定的店铺ID（storeIds数组优先），最多2个，取第一个作为主门店
@@ -219,11 +222,18 @@ export default function SendOrder() {
         return;
       }
 
-      // 生成自定义订单号
-      const orderNo = await generateOrderNo(finalStoreName || 'XX');
+      // 生成自定义订单号（确保只包含英文字母和数字）
+      let orderNo = await generateOrderNo(finalStoreName || 'XX');
+      // 防御：如果生成失败，用兜底格式
+      if (!orderNo || orderNo.length < 6) {
+        const now = new Date();
+        orderNo = `${String(now.getFullYear()).slice(-2)}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}XX${String(Math.floor(Math.random()*100)).padStart(2,'0')}01`;
+      }
+      console.log('[DEBUG] 生成订单号:', orderNo, '店铺:', finalStoreName);
 
       const newOrder: Partial<Order> = {
-        id: orderNo, // 使用自定义订单号
+        id: orderNo,
+        orderNo: orderNo,
         customerName: customerName || undefined,
         phone: phone || undefined,
         wechat: wechat || undefined,
@@ -386,6 +396,12 @@ export default function SendOrder() {
 
   // 判断订单是否属于当前客服
   const isMyOrder = (order: Order) => order.submitterId === user?.id;
+  // 判断是否有权限查看完整信息：BOSS/派单侠可看所有，客服只能看自己的
+  const canViewFullInfo = (order: Order) => {
+    const roles = user?.roles || [];
+    if (roles.includes('BOSS') || roles.includes('派单侠')) return true;
+    return order.submitterId === user?.id;
+  };
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#FAF5F0' }}>
@@ -402,6 +418,9 @@ export default function SendOrder() {
             <Button size="sm" onClick={() => setShowDailyCheckIn(true)} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F] whitespace-nowrap px-2.5 py-1 h-8 text-xs">
               {todayRecord ? '✓ 已打卡' : '📋 打卡'}
             </Button>
+            <Button size="sm" onClick={() => setShowCSPerformance(true)} className="bg-[#4A5E48] text-white hover:bg-[#3A4E38] whitespace-nowrap px-2.5 py-1 h-8 text-xs">
+              🏆 我的贡献
+            </Button>
             <span className="text-xs text-[#A08F80] hidden sm:inline mr-1">{user?.name || user?.username}</span>
             <button onClick={() => setShowPasswordDialog(true)} className="text-[#A08F80] hover:text-[#726255] p-1" title="修改密码">🔒</button>
             <button onClick={() => navigate('/portal')} className="text-[#A08F80] hover:text-[#726255] p-1" title="返回">←</button>
@@ -413,6 +432,7 @@ export default function SendOrder() {
       <div className="max-w-6xl mx-auto px-4 py-6">
         {/* 当日派单排名 */}
         <DailyRanking orders={orders} />
+        <DailyQuote />
 
         {/* 发单按钮 */}
         <div className="flex items-center justify-between mb-6">
@@ -513,19 +533,24 @@ export default function SendOrder() {
                             <Badge variant="outline" className="text-xs bg-[#E8DFD2] text-[#A08F80]">已评价</Badge>
                           )}
                         </div>
-                        <div className="grid grid-cols-3 gap-4 text-sm">
-                          <div>
+                        {/* 订单号 + 发出时间 */}
+                        <div className="flex items-center justify-between text-xs text-[#A08F80] mb-1">
+                          <span className="font-mono font-semibold text-[#4A3A2F]">#{order.id}</span>
+                          <span>📤 {formatDateTime((order as any).submittedAt)}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                          <div className="flex items-center">
                             <span className="text-[#A08F80]">客户:</span>
                             <span className="ml-1 font-medium">{order.customerName || '匿名'}</span>
                           </div>
-                          <div>
+                          <div className="flex items-center">
                             <span className="text-[#A08F80]">手机:</span>
                             <span className="ml-1">{order.phone || '-'}</span>
                             {order.phone && (
                               <button onClick={() => copyToClipboard(order.phone!)} className="ml-1 text-[#C89F7F] hover:text-[#A87F5F] text-xs">📋</button>
                             )}
                           </div>
-                          <div>
+                          <div className="flex items-center">
                             <span className="text-[#A08F80]">信息费:</span>
                             <span className="ml-1 font-medium">¥{order.infoFee}</span>
                           </div>
@@ -571,11 +596,11 @@ export default function SendOrder() {
                             );
                           } catch { return null; }
                         })()}
-                        {order.waiterName && (
-                          <div className="mt-1 text-sm text-[#A08F80]">
-                            服务员: {order.waiterName}
-                          </div>
-                        )}
+                        <div className="flex items-center gap-4 mt-1 text-xs text-[#A08F80]">
+                          <span>👤 客服: {order.submittedBy || '-'}</span>
+                          {order.waiterName && <span>💁 服务员: {order.waiterName}</span>}
+                          {order.dispatcherName && <span>📋 派单侠: {order.dispatcherName}</span>}
+                        </div>
                       </div>
                       <div className="flex flex-col gap-2 ml-4">
                         <button onClick={() => openDetail(order)} className="text-xs text-[#B88F6F] hover:text-[#7A5C48] whitespace-nowrap">👁️ 详情</button>
@@ -624,9 +649,11 @@ export default function SendOrder() {
                         <div className="mt-1 text-sm text-[#A08F80]">
                           地址: ***
                         </div>
-                        {order.waiterName && (
-                          <div className="mt-1 text-sm text-[#A08F80]">
-                            服务员: {order.waiterName}
+                        {/* 只有BOSS/派单侠才能在别人订单上看到客服/服务员信息 */}
+                        {canViewFullInfo(order) && (
+                          <div className="flex items-center gap-4 mt-1 text-xs text-[#A08F80]">
+                            <span>👤 客服: {order.submittedBy || '-'}</span>
+                            {order.waiterName && <span>💁 服务员: {order.waiterName}</span>}
                           </div>
                         )}
                       </div>
@@ -644,8 +671,8 @@ export default function SendOrder() {
 
       {/* 发单弹窗 */}
       {showForm && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowForm(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onMouseDown={() => setShowForm(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full max-h-[90vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-[#4A3A2F]">新建订单</h3>
@@ -798,8 +825,8 @@ export default function SendOrder() {
 
       {/* 补充内容弹窗 */}
       {showSupplement && supplementOrder && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowSupplement(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowSupplement(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-2">💬 发消息给派单侠</h3>
               <p className="text-sm text-[#A08F80] mb-4">订单 #{supplementOrder.id?.slice(-6)} · 客户: {supplementOrder.customerName || '匿名'}</p>
@@ -839,8 +866,8 @@ export default function SendOrder() {
 
       {/* 评价弹窗 */}
       {showReview && selectedOrder && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowReview(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowReview(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-2">评价服务员</h3>
               <p className="text-sm text-[#A08F80] mb-4">{selectedOrder.waiterName}</p>
@@ -903,8 +930,8 @@ export default function SendOrder() {
 
       {/* 被退跟进弹窗 */}
       {showFollowUp && followUpOrder && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowFollowUp(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowFollowUp(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full mx-4" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-2">⚠️ 被退订单跟进</h3>
               <p className="text-sm text-[#A08F80] mb-4">客户: {followUpOrder.customerName || '匿名'}</p>
@@ -1003,8 +1030,8 @@ export default function SendOrder() {
 
       {/* 详情弹窗 */}
       {showDetail && selectedOrder && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowDetail(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onMouseDown={() => setShowDetail(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full max-h-[80vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-[#4A3A2F]">订单详情</h3>
@@ -1013,6 +1040,16 @@ export default function SendOrder() {
               {isMyOrder(selectedOrder) ? (
                 /* ========== 自己的订单 - 完整详情 ========== */
                 <div className="space-y-3 text-sm">
+                  {/* 订单号 */}
+                  <div className="flex items-center justify-between bg-[#FFF1E3] p-3 rounded-lg border border-[#F7EEDB]">
+                    <span className="font-mono font-bold text-[#C89F7F] text-base">#{selectedOrder.id}</span>
+                    <span className="text-xs text-[#A08F80]">📤 {formatDateTime((selectedOrder as any).submittedAt)}</span>
+                  </div>
+                  {/* 订单时间线 */}
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg">
+                    <p className="text-[#A08F80] mb-2 font-medium">⏱️ 订单时间明细</p>
+                    <OrderTimeline order={selectedOrder} />
+                  </div>
                   <div className="bg-[#FAF5F0] p-3 rounded-lg">
                     <div className="grid grid-cols-2 gap-2">
                       <p><span className="text-[#A08F80]">客户:</span> {selectedOrder.customerName || '匿名'}</p>
@@ -1040,7 +1077,7 @@ export default function SendOrder() {
                   )}
                   <div className="bg-[#FAF5F0] p-3 rounded-lg">
                     <div className="grid grid-cols-2 gap-2">
-                      <p><span className="text-[#A08F80]">客服:</span> {selectedOrder.staffName || '-'}</p>
+                      <p><span className="text-[#A08F80]">客服:</span> {selectedOrder.submittedBy || '-'}</p>
                       <p><span className="text-[#A08F80]">派单侠:</span> {selectedOrder.dispatcherName || '-'}</p>
                       <p><span className="text-[#A08F80]">服务员:</span> {selectedOrder.waiterName || '-'}</p>
                       <p><span className="text-[#A08F80]">门店:</span> {selectedOrder.storeName || '-'}</p>
@@ -1132,6 +1169,16 @@ export default function SendOrder() {
               ) : (
                 /* ========== 别人的订单 - 模糊详情 ========== */
                 <div className="space-y-3 text-sm">
+                  {/* 订单号 */}
+                  <div className="flex items-center justify-between bg-[#FFF1E3] p-3 rounded-lg border border-[#F7EEDB]">
+                    <span className="font-mono font-bold text-[#C89F7F] text-base">#{selectedOrder.id}</span>
+                    <span className="text-xs text-[#A08F80]">📤 {formatDateTime((selectedOrder as any).submittedAt)}</span>
+                  </div>
+                  {/* 订单时间线 */}
+                  <div className="bg-[#FAF5F0] p-3 rounded-lg">
+                    <p className="text-[#A08F80] mb-2 font-medium">⏱️ 订单时间明细</p>
+                    <OrderTimeline order={selectedOrder} />
+                  </div>
                   {/* 隐私提示 */}
                   <div className="bg-[#F5DCD6] border border-[#E8B8B0] p-4 rounded-lg text-center">
                     <p className="text-[#8C3F30] text-lg mb-1">🔒 他人订单</p>
@@ -1149,20 +1196,25 @@ export default function SendOrder() {
                     <p className="text-[#A08F80] mb-1">地址</p>
                     <p className="text-[#A08F80]">***</p>
                   </div>
-                  <div className="bg-[#F8F4EF] p-3 rounded-lg">
-                    <div className="grid grid-cols-2 gap-2">
-                      <p><span className="text-[#A08F80]">客服:</span> {selectedOrder.staffName || '-'}</p>
-                      <p><span className="text-[#A08F80]">派单侠:</span> {selectedOrder.dispatcherName || '-'}</p>
-                      <p><span className="text-[#A08F80]">服务员:</span> {selectedOrder.waiterName || '-'}</p>
-                      <p><span className="text-[#A08F80]">门店:</span> {selectedOrder.storeName || '-'}</p>
-                    </div>
-                  </div>
-                  <div className="bg-[#F8F4EF] p-3 rounded-lg">
-                    <div className="grid grid-cols-2 gap-2">
-                      <p><span className="text-[#A08F80]">信息费:</span> ¥{selectedOrder.infoFee}</p>
-                      <p><span className="text-[#A08F80]">预付金:</span> ¥{selectedOrder.prepayAmount || 0}</p>
-                    </div>
-                  </div>
+                  {/* 只有BOSS/派单侠才能在别人的订单详情中看到完整信息 */}
+                  {canViewFullInfo(selectedOrder) && (
+                    <>
+                      <div className="bg-[#F8F4EF] p-3 rounded-lg">
+                        <div className="grid grid-cols-2 gap-2">
+                          <p><span className="text-[#A08F80]">客服:</span> {selectedOrder.submittedBy || '-'}</p>
+                          <p><span className="text-[#A08F80]">派单侠:</span> {selectedOrder.dispatcherName || '-'}</p>
+                          <p><span className="text-[#A08F80]">服务员:</span> {selectedOrder.waiterName || '-'}</p>
+                          <p><span className="text-[#A08F80]">门店:</span> {selectedOrder.storeName || '-'}</p>
+                        </div>
+                      </div>
+                      <div className="bg-[#F8F4EF] p-3 rounded-lg">
+                        <div className="grid grid-cols-2 gap-2">
+                          <p><span className="text-[#A08F80]">信息费:</span> ¥{selectedOrder.infoFee}</p>
+                          <p><span className="text-[#A08F80]">预付金:</span> ¥{selectedOrder.prepayAmount || 0}</p>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -1179,6 +1231,7 @@ export default function SendOrder() {
           initialData={todayRecord}
         />
       ) : null}
+      <CSPerformance open={showCSPerformance} onClose={() => setShowCSPerformance(false)} csId={user?.id} />
       {showPasswordDialog ? <PasswordChangeDialog userId={user?.id || ''} onClose={() => setShowPasswordDialog(false)} /> : null}
     </div>
   );

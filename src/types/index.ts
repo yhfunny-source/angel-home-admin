@@ -1,6 +1,26 @@
 // 用户角色（中文）
 export type UserRole = 'BOSS' | '经理' | '数据督导' | '客服' | '派单侠';
 
+export interface KBCategory {
+  id: string;
+  name: string;
+  sortOrder?: number;
+  createdAt?: string;
+}
+
+export interface KBArticle {
+  id: string;
+  title: string;
+  categoryId?: string;
+  categoryName?: string;
+  content: string;
+  tags?: string;
+  sortOrder?: number;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -141,6 +161,14 @@ export interface Order {
   historyCount?: number; // 历史消费次数
   createdAt: string;
   updatedAt?: string;
+  // 订单生命周期时间
+  submittedAt?: string;   // 客服发出时间
+  assignedAt?: string;    // 派单侠接单时间
+  departedAt?: string;    // 服务员出发时间
+  arrivedAt?: string;     // 服务员到达时间
+  servingAt?: string;     // 开始服务时间
+  completedAt?: string;   // 服务完成时间
+  rejectedAt?: string;    // 订单被退时间
 }
 
 export interface WaiterReview {

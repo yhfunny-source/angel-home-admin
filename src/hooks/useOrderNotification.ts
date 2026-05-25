@@ -1,23 +1,23 @@
-import { useEffect, useRef } from 'react';
 import type { Order } from '@/types';
 
 // 播放6秒提示音
-function playNotificationSound() {
+export function playNotificationSound() {
   try {
     const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
+    if (ctx.state === 'suspended') {
+      ctx.resume();
+    }
     const startTime = ctx.currentTime;
-    const duration = 6; // 6秒
+    const duration = 6;
 
-    // 主振荡器 - 交替高低音
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.type = 'sine';
 
-    // 6秒内交替频率
     const frequencies = [880, 1100, 880, 1100, 880, 1100];
     frequencies.forEach((freq, i) => {
       osc.frequency.setValueAtTime(freq, startTime + i);
@@ -29,7 +29,6 @@ function playNotificationSound() {
     osc.start(startTime);
     osc.stop(startTime + duration);
 
-    // 第二个振荡器增加层次感
     const osc2 = ctx.createOscillator();
     const gain2 = ctx.createGain();
     osc2.connect(gain2);
@@ -45,30 +44,31 @@ function playNotificationSound() {
     osc2.start(startTime);
     osc2.stop(startTime + duration);
   } catch {
-    // 音频播放失败静默处理
+    // 静默处理
   }
 }
 
-export function useOrderNotification(
-  orders: Order[],
-  onStatusChange: (order: Order, oldStatus: string, newStatus: string) => void
-) {
-  const prevOrdersRef = useRef<Map<string, string>>(new Map());
+// 比较前后订单列表，检测新订单和状态变化
+export function detectOrderChanges(
+  prevOrders: Order[],
+  currOrders: Order[]
+): { newOrders: Order[]; statusChanges: { order: Order; oldStatus: string; newStatus: string }[] } {
+  if (prevOrders.length === 0) {
+    return { newOrders: [], statusChanges: [] }; // 首次加载，不检测
+  }
 
-  useEffect(() => {
-    const prevMap = prevOrdersRef.current;
-    const newMap = new Map<string, string>();
+  const prevMap = new Map(prevOrders.map(o => [o.id, o.status]));
+  const newOrders: Order[] = [];
+  const statusChanges: { order: Order; oldStatus: string; newStatus: string }[] = [];
 
-    orders.forEach(o => {
-      newMap.set(o.id, o.status);
-      const oldStatus = prevMap.get(o.id);
-      if (oldStatus && oldStatus !== o.status) {
-        // 状态变化！
-        playNotificationSound();
-        onStatusChange(o, oldStatus, o.status);
-      }
-    });
+  currOrders.forEach(order => {
+    const oldStatus = prevMap.get(order.id);
+    if (oldStatus === undefined) {
+      newOrders.push(order);
+    } else if (oldStatus !== order.status) {
+      statusChanges.push({ order, oldStatus, newStatus: order.status });
+    }
+  });
 
-    prevOrdersRef.current = newMap;
-  }, [orders, onStatusChange]);
+  return { newOrders, statusChanges };
 }

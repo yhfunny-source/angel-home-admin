@@ -8,8 +8,8 @@ import { storage } from '@/lib/storage';
 import {
   getUsers, getStaff, getWaiters, getStores, getOrders,
   createUser, createStaff, createWaiter, createStore,
-  updateUser, updateStaff, updateWaiter, updateStore,
-  deleteUser, deleteStaff, deleteWaiter, deleteStore,
+  updateUser, updateStaff, updateWaiter, updateStore, updateOrder,
+  deleteUser, deleteStaff, deleteWaiter, deleteStore, deleteOrder,
   formatMoney, formatDateTime,
 } from '@/lib/api';
 import type { User, Staff, Waiter, Store, Order, UserRole, DailyRecord } from '@/types';
@@ -57,6 +57,8 @@ export default function Admin() {
   const [bindStoreId, setBindStoreId] = useState('');
   const [bindStoreName, setBindStoreName] = useState('');
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+  const [showRoleEdit, setShowRoleEdit] = useState(false);
+  const [editRoleUser, setEditRoleUser] = useState<User | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedBindStaffId, setSelectedBindStaffId] = useState('');
   const [detailStaff, setDetailStaff] = useState<Staff | null>(null);
@@ -64,19 +66,28 @@ export default function Admin() {
   const [checkinLoading, setCheckinLoading] = useState(false);
   const [checkinFilter, setCheckinFilter] = useState({ startDate: '', endDate: '', csName: '' });
   const [orderFilter, setOrderFilter] = useState({ status: '', search: '' });
+  const [showOrderEdit, setShowOrderEdit] = useState(false);
+  const [editOrder, setEditOrder] = useState<Order | null>(null);
+  const [orderEditForm, setOrderEditForm] = useState({ infoFee: '', prepayAmount: '', discount: '', notes: '' });
+  const [showCreateRole, setShowCreateRole] = useState(false);
+  const [newRoleName, setNewRoleName] = useState('');
+  const [rolePermissions, setRolePermissions] = useState<{roleName: string; modules: string[]}[]>([]);
 
   const currentUser = JSON.parse(storage.get('user') || '{}');
+  const isBoss = (currentUser?.roles || []).includes('BOSS');
 
   const loadData = async () => {
     try {
-      const [u, s, w, st, o] = await Promise.all([
+      const [u, s, w, st, o, rp] = await Promise.all([
         getUsers().catch(() => []),
         getStaff().catch(() => []),
         getWaiters().catch(() => []),
         getStores().catch(() => []),
         getOrders().catch(() => []),
+        fetch('/api/role-permissions', { headers: { 'Authorization': `Bearer ${storage.get('token') || ''}` } }).then(r => r.json()).then(d => d.data || []).catch(() => []),
       ]);
       setUsers(u); setStaff(s); setWaiters(w); setStores(st); setOrders(o);
+      setRolePermissions(rp);
     } catch { toast.error('数据加载失败'); }
     setLoading(false);
   };
@@ -270,7 +281,7 @@ export default function Admin() {
     <div className="min-h-screen bg-[#FAF5F0] flex relative">
       {/* Mobile overlay */}
       {sidebarOpen ? (
-        <div className="fixed inset-0 bg-[#4A3A2F]/50 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />
+        <div className="fixed inset-0 bg-[#4A3A2F]/50 z-40 lg:hidden" onMouseDown={() => setSidebarOpen(false)} />
       ) : null}
 
       {/* Sidebar */}
@@ -442,6 +453,7 @@ export default function Admin() {
                                 )}
                               </td>
                               <td className="px-4 py-3 text-right">
+                                <button onClick={() => { setEditRoleUser(u); setShowRoleEdit(true); }} className="text-[#5C7258] hover:text-[#4A5E48] text-xs mr-3">🔑权限</button>
                                 <button onClick={() => openForm('user', u)} className="text-[#B88F6F] hover:text-[#7A5C48] text-xs mr-3">编辑</button>
                                 <button onClick={() => confirmDelete('user', u.id, u.name || u.username)} className="text-[#B85C4A] hover:text-[#8C3F30] text-xs">删除</button>
                               </td>
@@ -457,16 +469,57 @@ export default function Admin() {
               {/* ====== Roles ====== */}
               {activeTab === 'roles' ? (
                 <div className="space-y-4">
-                  <h2 className="text-lg font-semibold text-[#4A3A2F]">角色权限</h2>
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-[#4A3A2F]">角色权限</h2>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={() => { setNewRoleName(''); setShowCreateRole(true); }} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F]">+ 新建用户组</Button>
+                      <Button size="sm" onClick={() => navigate('/role-permissions')} className="bg-[#726255] text-white hover:bg-[#5A4A3F]">🔐 配置模块权限</Button>
+                    </div>
+                  </div>
                   <div className="grid grid-cols-1 gap-4">
-                    {roleOrder.map(role => {
-                      const members = users.filter(u => (u.roles || []).includes(role));
+                    {(rolePermissions.length > 0 ? rolePermissions.map(rp => rp.roleName) : roleOrder).map((role: string) => {
+                      const members = users.filter(u => (u.roles || []).includes(role as any));
                       const noMembers = members.length === 0;
+                      const isProtected = role === 'BOSS';
+                      const rp = rolePermissions.find(r => r.roleName === role);
+                      const moduleCount = rp?.modules?.length || 0;
                       return (
                         <div key={role} className="rounded-xl border border-[#E8DFD2] shadow-sm p-5">
-                          <div className="flex items-center gap-3 mb-4">
-                            <Badge variant="outline" className={`text-sm px-3 py-1 ${roleColors[role]}`}>{role}</Badge>
-                            <span className="text-sm text-[#A08F80]">{members.length} 人</span>
+                          <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-3">
+                              <Badge variant="outline" className={`text-sm px-3 py-1 ${roleColors[role] || 'bg-[#E8DFD2] text-[#726255]'}`}>{role}</Badge>
+                              <span className="text-sm text-[#A08F80]">{members.length} 人</span>
+                              <span className="text-xs text-[#A08F80]">{moduleCount} 个模块</span>
+                            </div>
+                            {!isProtected && (
+                              <button
+                                onClick={() => {
+                                  if (confirm(`确定删除角色 "${role}"？\n\n${noMembers ? '该角色暂无成员。' : `该角色有 ${members.length} 个成员，删除后将从这些成员身上移除该角色。`}\n\n此操作不可撤销！`)) {
+                                    fetch(`/api/role-permissions/${encodeURIComponent(role)}`, {
+                                      method: 'DELETE',
+                                      headers: {
+                                        'Authorization': `Bearer ${storage.get('token') || ''}`,
+                                        'x-user-id': currentUser?.id || '',
+                                        'Content-Type': 'application/json'
+                                      }
+                                    })
+                                    .then(r => r.json())
+                                    .then(data => {
+                                      if (data.success) {
+                                        toast.success(`角色 "${role}" 已删除`);
+                                        loadData();
+                                      } else {
+                                        toast.error('删除失败: ' + (data.message || '未知错误'));
+                                      }
+                                    })
+                                    .catch(e => toast.error('删除失败: ' + (e.message || '网络错误')));
+                                  }
+                                }}
+                                className="text-xs text-[#B85C4A] hover:text-[#8C3F30] hover:bg-[#F5DCD6] px-2 py-1 rounded transition-colors"
+                              >
+                                🗑️ 删除角色组
+                              </button>
+                            )}
                           </div>
                           {noMembers ? (
                             <p className="text-sm text-[#A08F80] py-2">暂无成员</p>
@@ -721,7 +774,44 @@ export default function Admin() {
                           </div>
                           <div className="mt-1 text-sm"><span className="text-[#A08F80]">地址:</span> <span className="text-[#726255]">{order.address}</span></div>
                           {order.waiterName && <div className="text-sm"><span className="text-[#A08F80]">服务员:</span> {order.waiterName}</div>}
-                          <div className="mt-1 text-sm font-medium text-[#A87F5F]">信息费: ¥{order.infoFee || 0}</div>
+                          <div className="flex flex-wrap items-center gap-3 mt-1">
+                            <span className="text-sm font-medium text-[#A87F5F]">信息费: ¥{order.infoFee || 0}</span>
+                            {(order.prepayAmount || 0) > 0 && (
+                              <span className="text-sm text-[#726255]">预付金: ¥{order.prepayAmount}</span>
+                            )}
+                          </div>
+                          {isBoss && (
+                            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-[#E8DFD2]">
+                              <button
+                                onClick={() => {
+                                  setEditOrder(order);
+                                  setOrderEditForm({
+                                    infoFee: String(order.infoFee || 0),
+                                    prepayAmount: String(order.prepayAmount || 0),
+                                    discount: String((order as any).discount || 0),
+                                    notes: order.notes || ''
+                                  });
+                                  setShowOrderEdit(true);
+                                }}
+                                className="text-xs text-[#B88F6F] hover:text-[#7A5C48] hover:bg-[#F0E8DF] px-2 py-1 rounded transition-colors"
+                              >
+                                ✏️ 编辑
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (confirm(`确定删除订单 #${order.orderNo || order.id?.slice(-6)} (${order.customerName || '匿名'})?\n\n此操作不可撤销！`)) {
+                                    deleteOrder(order.id).then(() => {
+                                      toast.success('订单已删除');
+                                      loadData();
+                                    }).catch((e: any) => toast.error('删除失败: ' + (e.message || '无权删除')));
+                                  }
+                                }}
+                                className="text-xs text-[#B85C4A] hover:text-[#8C3F30] hover:bg-[#F5DCD6] px-2 py-1 rounded transition-colors"
+                              >
+                                🗑️ 删除
+                              </button>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -885,8 +975,8 @@ export default function Admin() {
 
       {/* ====== Staff Form (HR) ====== */}
       {showForm && formType === 'staff' ? (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowForm(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onMouseDown={() => setShowForm(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-2xl w-full max-h-[90vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">{editId ? '编辑' : '添加'}员工档案</h3>
               <div className="grid grid-cols-2 gap-4">
@@ -960,8 +1050,8 @@ export default function Admin() {
 
       {/* ====== Other Forms ====== */}
       {showForm && formType !== 'staff' ? (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowForm(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onMouseDown={() => setShowForm(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full max-h-[85vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">{editId ? '编辑' : '添加'}{formType === 'user' ? '用户' : formType === 'waiter' ? '服务员' : '门店'}</h3>
               <div className="space-y-3">
@@ -1087,8 +1177,8 @@ export default function Admin() {
 
       {/* ====== Bind Staff Modal ====== */}
       {showBindStaff ? (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowBindStaff(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onMouseDown={() => setShowBindStaff(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-md w-full" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#4A3A2F] mb-1">绑定客服</h3>
               <p className="text-sm text-[#A08F80] mb-4">门店: <strong>{bindStoreName}</strong></p>
@@ -1122,8 +1212,8 @@ export default function Admin() {
 
       {/* ====== Staff Detail Modal ====== */}
       {showStaffDetail && detailStaff ? (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowStaffDetail(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onMouseDown={() => setShowStaffDetail(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full max-h-[85vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-[#4A3A2F]">客服人事档案</h3>
@@ -1167,8 +1257,8 @@ export default function Admin() {
 
       {/* ====== Delete Confirm ====== */}
       {showDelete ? (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onClick={() => setShowDelete(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-sm w-full" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50 p-4" onMouseDown={() => setShowDelete(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-sm w-full" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <h3 className="text-lg font-bold text-[#A34E3C] mb-2">确认删除</h3>
               <p className="text-sm text-[#726255] mb-4">确定要删除 <strong>{deleteTarget.name}</strong> 吗？此操作不可恢复。</p>
@@ -1180,7 +1270,188 @@ export default function Admin() {
           </div>
         </div>
       ) : null}
+      {/* 权限编辑弹窗 */}
+      {showRoleEdit && editRoleUser && (
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowRoleEdit(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full mx-4 p-5" onMouseDown={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-[#4A3A2F] mb-1">编辑用户权限</h3>
+            <p className="text-xs text-[#A08F80] mb-4">用户: {editRoleUser.name || editRoleUser.username}</p>
+            <div className="space-y-2 mb-5">
+              {(['BOSS', '经理', '数据督导', '派单侠', '客服'] as const).map(role => (
+                <label key={role} className="flex items-center gap-2 p-2 rounded-lg hover:bg-[#FAF5F0] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={(editRoleUser.roles || []).includes(role as UserRole)}
+                    onChange={(e) => {
+                      const currentRoles = editRoleUser.roles || [];
+                      const newRoles = e.target.checked
+                        ? [...currentRoles, role as UserRole]
+                        : currentRoles.filter(r => r !== role);
+                      setEditRoleUser({ ...editRoleUser, roles: newRoles });
+                    }}
+                    className="w-4 h-4 accent-[#C89F7F]"
+                  />
+                  <span className="text-sm text-[#4A3A2F]">{role}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setShowRoleEdit(false)}>取消</Button>
+              <Button
+                className="flex-1 bg-[#C89F7F] text-white hover:bg-[#B88F6F]"
+                onClick={async () => {
+                  try {
+                    await updateUser(editRoleUser.id, { roles: editRoleUser.roles as UserRole[] });
+                    toast.success('权限更新成功');
+                    setShowRoleEdit(false);
+                    loadData();
+                  } catch (e: any) {
+                    toast.error('更新失败: ' + (e.message || '未知错误'));
+                  }
+                }}
+              >
+                保存
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       {showPasswordDialog ? <PasswordChangeDialog userId={currentUser?.id || ''} onClose={() => setShowPasswordDialog(false)} /> : null}
+
+      {/* 订单编辑弹窗 */}
+      {showOrderEdit && editOrder && (
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowOrderEdit(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-5" onMouseDown={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">编辑订单</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="text-sm text-[#726255] block mb-1">客户: {editOrder.customerName || '匿名'}</label>
+                <p className="text-xs text-[#A08F80]">订单号: #{editOrder.orderNo || editOrder.id?.slice(-6)}</p>
+              </div>
+              <div>
+                <label className="text-sm text-[#726255] block mb-1">信息费 (¥)</label>
+                <input
+                  type="number"
+                  value={orderEditForm.infoFee}
+                  onChange={e => setOrderEditForm(f => ({ ...f, infoFee: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm"
+                  min={0}
+                  step={0.5}
+                />
+              </div>
+              <div>
+                <label className="text-sm text-[#726255] block mb-1">预付金 (¥)</label>
+                <input
+                  type="number"
+                  value={orderEditForm.prepayAmount}
+                  onChange={e => setOrderEditForm(f => ({ ...f, prepayAmount: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm"
+                  min={0}
+                  step={0.5}
+                />
+              </div>
+              <div>
+                <label className="text-sm text-[#726255] block mb-1">优惠/对冲金额 (¥)</label>
+                <input
+                  type="number"
+                  value={orderEditForm.discount}
+                  onChange={e => setOrderEditForm(f => ({ ...f, discount: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm"
+                  placeholder="用于记录优惠或对冲金额"
+                  min={0}
+                  step={0.5}
+                />
+              </div>
+              <div>
+                <label className="text-sm text-[#726255] block mb-1">备注</label>
+                <textarea
+                  value={orderEditForm.notes}
+                  onChange={e => setOrderEditForm(f => ({ ...f, notes: e.target.value }))}
+                  rows={3}
+                  className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm resize-none"
+                  placeholder="订单备注信息..."
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-4">
+              <Button variant="outline" className="flex-1" onClick={() => setShowOrderEdit(false)}>取消</Button>
+              <Button
+                className="flex-1 bg-[#C89F7F] hover:bg-[#B08D6F] text-white border-0"
+                onClick={async () => {
+                  try {
+                    await updateOrder(editOrder.id, {
+                      infoFee: Number(orderEditForm.infoFee),
+                      prepayAmount: Number(orderEditForm.prepayAmount),
+                      notes: orderEditForm.notes || undefined
+                    });
+                    toast.success('订单已更新');
+                    setShowOrderEdit(false);
+                    loadData();
+                  } catch (e: any) {
+                    toast.error('更新失败: ' + (e.message || '未知错误'));
+                  }
+                }}
+              >
+                保存
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 新建用户组弹窗 */}
+      {showCreateRole && (
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowCreateRole(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full mx-4 p-5" onMouseDown={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">新建用户组</h3>
+            <div>
+              <label className="text-sm text-[#726255] block mb-1">用户组名称</label>
+              <input
+                type="text"
+                value={newRoleName}
+                onChange={e => setNewRoleName(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm"
+                placeholder="例如：财务、运营..."
+                autoFocus
+              />
+              <p className="text-xs text-[#A08F80] mt-1">创建后可在「配置模块权限」中设置该用户组可访问的模块。</p>
+            </div>
+            <div className="flex gap-3 mt-4">
+              <Button variant="outline" className="flex-1" onClick={() => setShowCreateRole(false)}>取消</Button>
+              <Button
+                className="flex-1 bg-[#C89F7F] hover:bg-[#B08D6F] text-white border-0"
+                onClick={async () => {
+                  const name = newRoleName.trim();
+                  if (!name) { toast.error('请输入用户组名称'); return; }
+                  try {
+                    const res = await fetch('/api/role-permissions', {
+                      method: 'POST',
+                      headers: {
+                        'Authorization': `Bearer ${storage.get('token') || ''}`,
+                        'x-user-id': currentUser?.id || '',
+                        'Content-Type': 'application/json'
+                      },
+                      body: JSON.stringify({ roleName: name, modules: [] })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                      toast.success(`用户组 "${name}" 创建成功`);
+                      setShowCreateRole(false);
+                      loadData();
+                    } else {
+                      toast.error('创建失败: ' + (data.message || '未知错误'));
+                    }
+                  } catch (e: any) {
+                    toast.error('创建失败: ' + (e.message || '网络错误'));
+                  }
+                }}
+              >
+                创建
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

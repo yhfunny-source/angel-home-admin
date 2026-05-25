@@ -16,11 +16,12 @@ export default function Cockpit() {
   const [showOrderDetail, setShowOrderDetail] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [detailView, setDetailView] = useState<'stores' | 'waiters' | 'staff' | null>(null);
+  const [timeRange, setTimeRange] = useState<'today' | '7d' | '30d' | 'month' | 'year'>('today');
 
   const load = async () => {
     setLoading(true);
     try {
-      const res = await getCockpit();
+      const res = await getCockpit(timeRange);
       setData(res);
     } catch (e: any) {
       toast.error('数据加载失败: ' + e.message);
@@ -87,53 +88,76 @@ export default function Cockpit() {
             <div className="w-8 h-8 border-4 border-[#C89F7F] border-t-transparent rounded-full animate-spin" />
           </div>
         ) : data ? (
-          <div className="space-y-6">
-            {/* KPI */}
-            <div className="grid grid-cols-6 gap-4">
+          <div className="space-y-4 sm:space-y-6">
+            {/* 时间维度筛选 */}
+            <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
+              {[
+                { key: 'today' as const, label: '今日' },
+                { key: '7d' as const, label: '近7天' },
+                { key: '30d' as const, label: '近30天' },
+                { key: 'month' as const, label: '本月' },
+                { key: 'year' as const, label: '本年' },
+              ].map(item => (
+                <button
+                  key={item.key}
+                  onClick={() => { setTimeRange(item.key); setTimeout(load, 0); }}
+                  className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                    timeRange === item.key
+                      ? 'bg-[#C89F7F] text-white'
+                      : 'bg-white text-[#726255] border border-[#E8DFD2]'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            {/* KPI - 手机端3列，平板3列，桌面6列 */}
+            <div className="grid grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
               {[
                 { label: '总订单', value: data.kpi.totalOrders, icon: '📋', color: 'from-[#C89F7F] to-[#B88F6F]' },
                 { label: '已完成', value: data.kpi.completedOrders, icon: '✅', color: 'from-[#5C7258] to-[#4A5E48]' },
-                { label: '总收入', value: formatMoney(data.kpi.totalRevenue), icon: '💰', color: 'from-[#C89F7F] to-[#B88F6F]' },
-                { label: '信息费', value: formatMoney(data.kpi.totalInfoFee), icon: '💎', color: 'from-[#8C6A53] to-[#7A5C48]' },
+                { label: '总收入', value: formatMoney(parseFloat(String(data.kpi.totalRevenue)) || 0), icon: '💰', color: 'from-[#C89F7F] to-[#B88F6F]' },
+                { label: '信息费', value: formatMoney(parseFloat(String(data.kpi.totalInfoFee)) || 0), icon: '💎', color: 'from-[#8C6A53] to-[#7A5C48]' },
                 { label: '营业门店', value: data.kpi.activeStores, icon: '🏪', color: 'from-[#B88F6F] to-[#A87F5F]' },
                 { label: '在岗服务员', value: data.kpi.activeWaiters, icon: '👔', color: 'from-[#14B8A6] to-[#0D9488]' },
               ].map(card => (
-                <div key={card.label} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm">
-                  <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${card.color} flex items-center justify-center mb-3 shadow-md`}>
-                    <span className="text-lg">{card.icon}</span>
+                <div key={card.label} className="rounded-xl p-2 sm:p-4 border border-[#E8DFD2] shadow-sm text-center">
+                  <div className={`w-7 h-7 sm:w-10 sm:h-10 rounded-lg bg-gradient-to-br ${card.color} flex items-center justify-center mb-1 sm:mb-2 shadow-md mx-auto`}>
+                    <span className="text-xs sm:text-lg">{card.icon}</span>
                   </div>
-                  <p className="text-xs text-[#A08F80] mb-1">{card.label}</p>
-                  <p className="text-xl font-bold text-[#4A3A2F]">{card.value}</p>
+                  <p className="text-[9px] sm:text-xs text-[#A08F80] mb-0.5 whitespace-nowrap">{card.label}</p>
+                  <p className="text-sm sm:text-xl font-bold text-[#4A3A2F] truncate">{card.value}</p>
                 </div>
               ))}
             </div>
 
-            {/* 快捷入口 */}
-            <div className="grid grid-cols-3 gap-4">
-              <button onClick={() => setDetailView('stores')} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
+            {/* 快捷入口 - 手机端1列，桌面3列 */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <button onClick={() => setDetailView('stores')} className="rounded-xl p-4 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#C89F7F] to-[#B88F6F] flex items-center justify-center text-xl shadow-md">🏪</div>
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-br from-[#C89F7F] to-[#B88F6F] flex items-center justify-center text-lg sm:text-xl shadow-md shrink-0">🏪</div>
                   <div>
-                    <h3 className="font-semibold text-[#4A3A2F]">店铺业绩</h3>
-                    <p className="text-sm text-[#A08F80]">{data.storeStats?.length || 0} 家门店</p>
+                    <h3 className="font-semibold text-[#4A3A2F] text-sm sm:text-base">店铺业绩</h3>
+                    <p className="text-xs sm:text-sm text-[#A08F80]">{data.storeStats?.length || 0} 家门店</p>
                   </div>
                 </div>
               </button>
-              <button onClick={() => setDetailView('waiters')} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
+              <button onClick={() => setDetailView('waiters')} className="rounded-xl p-4 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#B88F6F] to-[#A87F5F] flex items-center justify-center text-xl shadow-md">👔</div>
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-br from-[#B88F6F] to-[#A87F5F] flex items-center justify-center text-lg sm:text-xl shadow-md shrink-0">👔</div>
                   <div>
-                    <h3 className="font-semibold text-[#4A3A2F]">服务员业绩</h3>
-                    <p className="text-sm text-[#A08F80]">{data.waiterStats?.length || 0} 位服务员</p>
+                    <h3 className="font-semibold text-[#4A3A2F] text-sm sm:text-base">服务员业绩</h3>
+                    <p className="text-xs sm:text-sm text-[#A08F80]">{data.waiterStats?.length || 0} 位服务员</p>
                   </div>
                 </div>
               </button>
-              <button onClick={() => setDetailView('staff')} className="rounded-xl p-5 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
+              <button onClick={() => setDetailView('staff')} className="rounded-xl p-4 border border-[#E8DFD2] shadow-sm hover:shadow-md transition-all text-left">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#5C7258] to-[#4A5E48] flex items-center justify-center text-xl shadow-md">💬</div>
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-br from-[#5C7258] to-[#4A5E48] flex items-center justify-center text-lg sm:text-xl shadow-md shrink-0">💬</div>
                   <div>
-                    <h3 className="font-semibold text-[#4A3A2F]">客服业绩</h3>
-                    <p className="text-sm text-[#A08F80]">{data.staffStats?.length || 0} 位客服</p>
+                    <h3 className="font-semibold text-[#4A3A2F] text-sm sm:text-base">客服业绩</h3>
+                    <p className="text-xs sm:text-sm text-[#A08F80]">{data.staffStats?.length || 0} 位客服</p>
                   </div>
                 </div>
               </button>
@@ -217,13 +241,14 @@ export default function Cockpit() {
               </div>
             )}
 
-            {/* 最近订单 */}
+            {/* 最近订单 - 手机端卡片式，桌面端表格 */}
             <div className="rounded-xl border border-[#E8DFD2] shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-[#E8DFD2] flex items-center justify-between">
+              <div className="px-4 sm:px-5 py-3 sm:py-4 border-b border-[#E8DFD2] flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-[#4A3A2F]">最近订单</h3>
                 <span className="text-xs text-[#A08F80]">最近10笔</span>
               </div>
-              <div className="overflow-x-auto">
+              {/* 桌面端表格 */}
+              <div className="hidden sm:block overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-[#FAF5F0] text-[#726255]">
                     <tr>
@@ -243,9 +268,7 @@ export default function Cockpit() {
                       <tr key={order.id} className="hover:bg-[#FAF5F0] cursor-pointer" onClick={() => openOrder(order)}>
                         <td className="px-4 py-3 text-[#726255]">{formatDateTime(order.createdAt)}</td>
                         <td className="px-4 py-3 font-medium text-[#4A3A2F]">{order.customerName || '匿名'}</td>
-                        <td className="px-4 py-3">
-                          <StatusBadge status={order.status} />
-                        </td>
+                        <td className="px-4 py-3"><StatusBadge status={order.status} /></td>
                         <td className="px-4 py-3">{order.staffName || '-'}</td>
                         <td className="px-4 py-3">{order.waiterName || '-'}</td>
                         <td className="px-4 py-3">{order.storeName || '-'}</td>
@@ -255,6 +278,31 @@ export default function Cockpit() {
                   </tbody>
                 </table>
               </div>
+              {/* 手机端卡片 */}
+              <div className="sm:hidden divide-y divide-[#E8DFD2]">
+                {data.recentOrders?.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-[#A08F80] text-sm">暂无订单</div>
+                ) : data.recentOrders?.map(order => (
+                  <div key={order.id} className="p-3 active:bg-[#FAF5F0] cursor-pointer" onClick={() => openOrder(order)}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-medium text-sm text-[#4A3A2F]">{order.customerName || '匿名'}</span>
+                      <StatusBadge status={order.status} />
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-[#A08F80]">
+                      <span>{formatDateTime(order.createdAt)}</span>
+                      <span>|</span>
+                      <span>{order.storeName || '-'}</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-1">
+                      <div className="flex items-center gap-2 text-xs text-[#726255]">
+                        <span>👤{order.staffName || '-'}</span>
+                        <span>💁{order.waiterName || '-'}</span>
+                      </div>
+                      <span className="text-sm font-medium text-[#C89F7F]">{formatMoney(order.infoFee)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         ) : null}
@@ -262,8 +310,8 @@ export default function Cockpit() {
 
       {/* 订单详情弹窗 */}
       {showOrderDetail && selectedOrder && (
-        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onClick={() => setShowOrderDetail(false)}>
-          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowOrderDetail(false)}>
+          <div className="rounded-2xl shadow-2xl bg-[#FFFFFF] max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()}>
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-[#4A3A2F]">订单详情</h3>

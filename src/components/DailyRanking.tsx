@@ -29,20 +29,43 @@ export default function DailyRanking({ orders }: DailyRankingProps) {
       return;
     }
 
-    // 使用北京时间（UTC+8），只统计当天12:00之后的订单（业务周期从中午12点开始）
+    // ============ 北京时间周期计算 ============
+    // 业务周期：每天中午12:00 ~ 次日中午12:00
     const now = new Date();
-    const beijingNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-    const today = beijingNow.toISOString().slice(0, 10);
-    // 12:00 的边界（北京时间）
-    const noonBoundary = new Date(`${today}T12:00:00+08:00`);
-    
+    // 当前 UTC 时间戳
+    const utcMs = now.getTime();
+    // 北京时间 = UTC + 8小时
+    const beijingHour = (now.getUTCHours() + 8) % 24; // 0-23 北京时间小时
+    // 正确获取北京日期：用本地时间格式化避免时区偏移
+    const beijingNow = new Date(utcMs + 8 * 3600 * 1000);
+    const year = beijingNow.getUTCFullYear();
+    const month = String(beijingNow.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(beijingNow.getUTCDate()).padStart(2, '0');
+    const todayStr = `${year}-${month}-${day}`;
+
+    // 计算周期边界（UTC 时间戳）
+    let cycleStartUtc: number; // 当天12:00或昨天12:00的UTC时间
+    if (beijingHour >= 12) {
+      // 北京时间 >= 12:00，周期从今天12:00开始
+      // 今天12:00北京时间 = 今天4:00 UTC
+      const todayNoonBeijing = new Date(`${todayStr}T12:00:00+08:00`);
+      cycleStartUtc = todayNoonBeijing.getTime();
+    } else {
+      // 北京时间 < 12:00，周期从昨天12:00开始
+      // 昨天12:00北京时间
+      const yesterday = new Date(utcMs + 8 * 3600 * 1000 - 24 * 3600 * 1000);
+      const yYear = yesterday.getUTCFullYear();
+      const yMonth = String(yesterday.getUTCMonth() + 1).padStart(2, '0');
+      const yDay = String(yesterday.getUTCDate()).padStart(2, '0');
+      const yesterdayNoonBeijing = new Date(`${yYear}-${yMonth}-${yDay}T12:00:00+08:00`);
+      cycleStartUtc = yesterdayNoonBeijing.getTime();
+    }
+
     const todayOrders = orders.filter(o => {
-      // 订单 submittedAt/createdAt 是UTC时间，转为北京时间
       const dateField = (o as any).submittedAt || o.createdAt;
       if (!dateField) return false;
-      const orderTime = new Date(new Date(dateField).getTime() + 8 * 60 * 60 * 1000);
-      // 只统计当天12:00之后的订单
-      return orderTime >= noonBoundary;
+      const orderUtcMs = new Date(dateField).getTime();
+      return orderUtcMs >= cycleStartUtc;
     });
 
     // 按客服分组统计
@@ -85,9 +108,9 @@ export default function DailyRanking({ orders }: DailyRankingProps) {
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1.5">
           <span className="text-base">🏆</span>
-          <h3 className="font-bold text-[#4A3A2F] text-sm">派单排名</h3>
+          <h3 className="font-bold text-[#4A3A2F] text-sm">今日榜单</h3>
           <span className="text-[10px] text-[#A08F80] bg-[#F0E8DF] px-1.5 py-0.5 rounded-full">
-            今日12:00起
+            12:00-次日12:00
           </span>
         </div>
         <div className="flex items-center gap-2 text-xs">
@@ -103,10 +126,10 @@ export default function DailyRanking({ orders }: DailyRankingProps) {
       </div>
 
       {/* 排名卡片 - 横向滚动 */}
-      <div className="overflow-x-auto pb-2 scrollbar-hide">
+      <div className="overflow-x-auto pb-2 pt-2 scrollbar-hide" style={{ paddingTop: '8px' }}>
         {ranking.length === 0 ? (
           <div className="text-center py-3 text-xs text-[#A08F80] bg-[#FAF5F0] rounded-lg">
-            今日12:00后暂无订单
+            本周期暂无订单
           </div>
         ) : (
         <div className="flex gap-2" style={{ minWidth: 'max-content' }}>
@@ -115,48 +138,48 @@ export default function DailyRanking({ orders }: DailyRankingProps) {
             return (
               <div
                 key={item.csId}
-                className={`relative flex-shrink-0 rounded-lg border p-2.5 w-36 transition-all ${
+                className={`flex-shrink-0 rounded-xl border p-2.5 w-[115px] transition-all ${
                   isMe
                     ? 'border-[#C89F7F] bg-[#FFF1E3]'
                     : 'border-[#E8DFD2] bg-[#FFFFFF]'
                 }`}
               >
-                {/* 排名标识 */}
-                <div className={`absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                  index === 0 ? 'bg-[#FFD700] text-[#8B6914]' :
-                  index === 1 ? 'bg-[#C0C0C0] text-[#666]' :
-                  index === 2 ? 'bg-[#CD7F32] text-white' :
-                  'bg-[#E8DFD2] text-[#726255]'
-                }`}>
-                  {index + 1}
+                {/* 排名标识 - 内联在卡片内部，绝对不会再被截断 */}
+                <div className="flex items-center gap-1.5 mb-1">
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shadow-sm ${
+                    index === 0 ? 'bg-[#FFD700] text-[#8B6914]' :
+                    index === 1 ? 'bg-[#C0C0C0] text-[#666]' :
+                    index === 2 ? 'bg-[#CD7F32] text-white' :
+                    'bg-[#E8DFD2] text-[#726255]'
+                  }`}>
+                    {index + 1}
+                  </div>
+                  <p className={`font-semibold text-sm truncate ${isMe ? 'text-[#C89F7F]' : 'text-[#4A3A2F]'}`}>
+                    {item.csName}{isMe && <span className="text-[10px]">(我)</span>}
+                  </p>
                 </div>
 
-                <div className="flex items-center gap-1.5 mt-0.5 ml-2">
+                <div className="flex items-center gap-2 ml-0.5">
                   {/* 头像 */}
                   <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold ${
                     isMe ? 'bg-[#C89F7F]' : 'bg-[#A08F80]'
                   }`}>
                     {item.csName?.[0] || '?'}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={`font-medium text-xs truncate ${isMe ? 'text-[#C89F7F]' : 'text-[#4A3A2F]'}`}>
-                      {item.csName}{isMe && <span className="text-[10px]">(我)</span>}
-                    </p>
-                    <p className="text-base font-bold text-[#4A3A2F] leading-tight">
-                      {item.total}<span className="text-[10px] font-normal text-[#A08F80]">单</span>
-                    </p>
-                  </div>
+                  <p className="text-base font-bold text-[#4A3A2F] leading-tight">
+                    {item.total}<span className="text-[10px] font-normal text-[#A08F80]">单</span>
+                  </p>
                 </div>
 
-                {/* 细分统计 - 缩小 */}
+                {/* 细分统计 */}
                 <div className="flex gap-1 mt-1.5 text-[10px]">
-                  <span className="bg-[#E8DFD2] text-[#726255] px-1.5 py-0.5 rounded-full">
+                  <span className="bg-[#E8DFD2] text-[#726255] px-1.5 py-0.5 rounded-full whitespace-nowrap">
                     派{item.pending}
                   </span>
-                  <span className="bg-[#DDE5D8] text-[#3D4F3A] px-1.5 py-0.5 rounded-full">
+                  <span className="bg-[#DDE5D8] text-[#3D4F3A] px-1.5 py-0.5 rounded-full whitespace-nowrap">
                     完{item.completed}
                   </span>
-                  <span className="bg-[#FFF1E3] text-[#A87F5F] px-1.5 py-0.5 rounded-full">
+                  <span className="bg-[#FFF1E3] text-[#A87F5F] px-1.5 py-0.5 rounded-full whitespace-nowrap">
                     进{item.inProgress}
                   </span>
                 </div>

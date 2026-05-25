@@ -1,4 +1,4 @@
-import type { ApiResponse, LoginCredentials, User, Staff, Waiter, Store, Order, WaiterReview, CockpitData, DailyRecord, Customer, CustomerService } from '@/types';
+import type { ApiResponse, LoginCredentials, User, Staff, Waiter, Store, Order, WaiterReview, CockpitData, DailyRecord, Customer, CustomerService, KBCategory, KBArticle } from '@/types';
 import { storage } from './storage';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
@@ -181,8 +181,9 @@ export async function getReviews(params?: { orderId?: string; waiterId?: string;
 }
 
 // 驾驶舱
-export async function getCockpit(): Promise<CockpitData> {
-  return request<CockpitData>('GET', '/cockpit');
+export async function getCockpit(timeRange?: string): Promise<CockpitData> {
+  const qs = timeRange ? `?timeRange=${timeRange}` : '';
+  return request<CockpitData>('GET', '/cockpit' + qs);
 }
 
 // 健康检查
@@ -314,19 +315,154 @@ export async function getCSPortraits(csId?: string): Promise<{ csStats: any[]; w
   return data.data;
 }
 
+// 手动解析 YYYY-MM-DD HH:MM:SS 格式，并将UTC时间+8小时转为北京时间(CST)
+// 数据库中存储的是UTC时间（MySQL NOW()在服务器上返回UTC），需要转换为北京时间显示
+function parseBeijingTime(dt?: string): { month: string; day: string; hour: string; minute: string; year: string } | null {
+  if (!dt) return null;
+  const m = dt.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  let year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+  let hour = Number(m[4]) + 8; // UTC+8 = 北京时间
+  // 处理跨天
+  if (hour >= 24) { hour -= 24; day += 1; }
+  // 处理跨月（简化处理，不考虑闰年）
+  const daysInMonth = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (day > daysInMonth[month]) { day = 1; month += 1; }
+  if (month > 12) { month = 1; year += 1; }
+  return {
+    year: String(year),
+    month: String(month).padStart(2, '0'),
+    day: String(day).padStart(2, '0'),
+    hour: String(hour).padStart(2, '0'),
+    minute: m[5]
+  };
+}
+
 export function formatDateTime(dt?: string): string {
-  if (!dt) return '-';
-  const d = new Date(dt);
-  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const p = parseBeijingTime(dt);
+  if (!p) return dt || '-';
+  return `${p.month}/${p.day} ${p.hour}:${p.minute}`;
 }
 
 export function formatDate(dt?: string): string {
-  if (!dt) return '-';
-  const d = new Date(dt);
-  return d.toLocaleDateString('zh-CN');
+  const p = parseBeijingTime(dt);
+  if (!p) return dt || '-';
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+// ===== 知识库 API =====
+export async function getKBCategories(): Promise<KBCategory[]> {
+  const res = await fetch('/api/kb/categories', { headers: getAuthHeadersForFetch() });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || '获取分类失败');
+  return data.data || [];
+}
+export async function createKBCategory(data: { name: string; sortOrder?: number }): Promise<{ id: string }> {
+  const res = await fetch('/api/kb/categories', { method: 'POST', headers: getAuthHeadersForFetch(), body: JSON.stringify(data) });
+  const result = await res.json();
+  if (!result.success) throw new Error(result.message || '创建分类失败');
+  return result.data;
+}
+export async function updateKBCategory(id: string, data: { name?: string; sortOrder?: number }): Promise<void> {
+  const res = await fetch('/api/kb/categories/' + id, { method: 'PUT', headers: getAuthHeadersForFetch(), body: JSON.stringify(data) });
+  const result = await res.json();
+  if (!result.success) throw new Error(result.message || '更新分类失败');
+}
+export async function deleteKBCategory(id: string): Promise<void> {
+  const res = await fetch('/api/kb/categories/' + id, { method: 'DELETE', headers: getAuthHeadersForFetch() });
+  const result = await res.json();
+  if (!result.success) throw new Error(result.message || '删除分类失败');
+}
+export async function getKBArticles(params?: { category?: string; search?: string }): Promise<KBArticle[]> {
+  const qs = params ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined) as [string, string][]).toString() : '';
+  const res = await fetch('/api/kb/articles' + qs, { headers: getAuthHeadersForFetch() });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || '获取文章失败');
+  return data.data || [];
+}
+export async function getKBArticle(id: string): Promise<KBArticle> {
+  const res = await fetch('/api/kb/articles/' + id, { headers: getAuthHeadersForFetch() });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || '获取文章失败');
+  return data.data;
+}
+export async function createKBArticle(data: Partial<KBArticle>): Promise<{ id: string }> {
+  const res = await fetch('/api/kb/articles', { method: 'POST', headers: getAuthHeadersForFetch(), body: JSON.stringify(data) });
+  const result = await res.json();
+  if (!result.success) throw new Error(result.message || '创建文章失败');
+  return result.data;
+}
+export async function updateKBArticle(id: string, data: Partial<KBArticle>): Promise<void> {
+  const res = await fetch('/api/kb/articles/' + id, { method: 'PUT', headers: getAuthHeadersForFetch(), body: JSON.stringify(data) });
+  const result = await res.json();
+  if (!result.success) throw new Error(result.message || '更新文章失败');
+}
+export async function deleteKBArticle(id: string): Promise<void> {
+  const res = await fetch('/api/kb/articles/' + id, { method: 'DELETE', headers: getAuthHeadersForFetch() });
+  const result = await res.json();
+  if (!result.success) throw new Error(result.message || '删除文章失败');
 }
 
 export function formatMoney(n?: number): string {
   if (n === undefined || n === null) return '-';
-  return '¥' + n.toLocaleString('zh-CN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  // 确保是数字
+  const num = typeof n === 'string' ? parseFloat(n) : Number(n);
+  if (isNaN(num)) return '-';
+  // 大于10000用"万"简化
+  if (num >= 10000) {
+    return '¥' + (num / 10000).toFixed(1) + '万';
+  }
+  // 整数不显示小数，有小数最多2位
+  const hasDecimal = num % 1 !== 0;
+  return '¥' + (hasDecimal ? num.toFixed(2) : String(Math.round(num)));
+}
+
+export interface CSPerformance {
+  csName: string;
+  year: number;
+  month: number;
+  totalDispatch: number;
+  completed: number;
+  rejected: number;
+  totalInfoFee: number;
+  dailyStats: { date: string; dispatchCount: number; dealCount: number; infoFee: number }[];
+}
+
+export async function getCSPerformance(csId?: string): Promise<CSPerformance> {
+  const qs = csId ? `?csId=${csId}` : '';
+  const res = await fetch('/api/cs-performance' + qs, { headers: getAuthHeadersForFetch() });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || '获取业绩失败');
+  return data.data;
+}
+
+// ========== 角色权限 ==========
+export interface RolePermission {
+  id: number;
+  roleName: string;
+  modules: string[];
+}
+
+export async function getRolePermissions(): Promise<RolePermission[]> {
+  const res = await fetch('/api/role-permissions', { headers: getAuthHeadersForFetch() });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || '获取权限失败');
+  return data.data;
+}
+
+export async function updateRolePermission(roleName: string, modules: string[]): Promise<void> {
+  const res = await fetch('/api/role-permissions/' + encodeURIComponent(roleName), {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ modules }),
+  });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.message || '更新权限失败');
+}
+
+export async function getMyPermissions(): Promise<string[]> {
+  const res = await fetch('/api/my-permissions', { headers: getAuthHeadersForFetch() });
+  const data = await res.json();
+  if (!data.success) return [];
+  return data.data;
 }
