@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { storage } from '@/lib/storage';
+import PhotoUploader from '@/components/PhotoUploader';
 
 // ============ 类型定义 ============
 interface Recruitment {
@@ -10,6 +11,7 @@ interface Recruitment {
   phone: string; position: string; source: string;
   status: 'pending' | 'interview' | 'hired' | 'rejected';
   interviewDate?: string; notes: string; createdAt: string;
+  idCardFront?: string; idCardBack?: string;
 }
 interface Resignation {
   id: string; staffId: string; staffName: string; position: string;
@@ -27,28 +29,49 @@ interface CompanyAsset {
   purchaseDate?: string; value?: number; notes: string;
 }
 interface PhoneTransfer {
-  id: string; phoneNumber: string; fromStaff: string; toStaff: string;
-  transferDate: string; wechatBind: string; notes: string;
+  id: string;
+  phoneNumber: string;
+  deviceModel: string;
+  imei: string;
+  simNumber: string;
+  fromStaff: string;
+  toStaff: string;
+  transferType: 'handover' | 'return' | 'borrow';
+  transferDate: string;
+  returnDate?: string;
+  wechatBind: 'bound' | 'unbound' | 'changed';
+  status: 'pending' | 'done' | 'returned';
+  condition: string;
+  accessories: string;
+  notes: string;
 }
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
-  pending: { label: '待处理', color: 'bg-[#FFF1E3] text-[#A87F5F]' },
-  interview: { label: '面试中', color: 'bg-[#E8F0FE] text-[#4A7BD9]' },
-  hired: { label: '已录用', color: 'bg-[#EEF1EB] text-[#4A5E48]' },
-  rejected: { label: '已拒绝', color: 'bg-[#F5DCD6] text-[#8C3F30]' },
-  normal: { label: '正常', color: 'bg-[#EEF1EB] text-[#4A5E48]' },
-  late: { label: '迟到', color: 'bg-[#FFF1E3] text-[#A87F5F]' },
-  early: { label: '早退', color: 'bg-[#FFF1E3] text-[#A87F5F]' },
-  absent: { label: '缺勤', color: 'bg-[#F5DCD6] text-[#8C3F30]' },
-  leave: { label: '请假', color: 'bg-[#E8F0FE] text-[#4A7BD9]' },
-  good: { label: '正常', color: 'bg-[#EEF1EB] text-[#4A5E48]' },
-  repairing: { label: '维修中', color: 'bg-[#FFF1E3] text-[#A87F5F]' },
-  scrapped: { label: '报废', color: 'bg-[#F5DCD6] text-[#8C3F30]' },
+  pending: { label: '待处理', color: 'bg-[#FFF1E3] text-[#A87F5F] border-[#E8D5C4]' },
+  interview: { label: '面试中', color: 'bg-[#E8F0FE] text-[#4A7BD9] border-[#C4D8F5]' },
+  hired: { label: '已录用', color: 'bg-[#EEF1EB] text-[#4A5E48] border-[#C4D4BE]' },
+  rejected: { label: '已拒绝', color: 'bg-[#F5DCD6] text-[#8C3F30] border-[#E8C4BC]' },
+  normal: { label: '正常', color: 'bg-[#EEF1EB] text-[#4A5E48] border-[#C4D4BE]' },
+  late: { label: '迟到', color: 'bg-[#FFF1E3] text-[#A87F5F] border-[#E8D5C4]' },
+  early: { label: '早退', color: 'bg-[#FFF1E3] text-[#A87F5F] border-[#E8D5C4]' },
+  absent: { label: '缺勤', color: 'bg-[#F5DCD6] text-[#8C3F30] border-[#E8C4BC]' },
+  leave: { label: '请假', color: 'bg-[#E8F0FE] text-[#4A7BD9] border-[#C4D8F5]' },
+  good: { label: '正常', color: 'bg-[#EEF1EB] text-[#4A5E48] border-[#C4D4BE]' },
+  repairing: { label: '维修中', color: 'bg-[#FFF1E3] text-[#A87F5F] border-[#E8D5C4]' },
+  scrapped: { label: '报废', color: 'bg-[#F5DCD6] text-[#8C3F30] border-[#E8C4BC]' },
+  handover: { label: '移交', color: 'bg-[#E8F0FE] text-[#4A7BD9] border-[#C4D8F5]' },
+  return: { label: '归还', color: 'bg-[#EEF1EB] text-[#4A5E48] border-[#C4D4BE]' },
+  borrow: { label: '借用', color: 'bg-[#FFF1E3] text-[#A87F5F] border-[#E8D5C4]' },
+  bound: { label: '已绑定', color: 'bg-[#EEF1EB] text-[#4A5E48] border-[#C4D4BE]' },
+  unbound: { label: '未绑定', color: 'bg-[#F5DCD6] text-[#8C3F30] border-[#E8C4BC]' },
+  changed: { label: '已换绑', color: 'bg-[#FFF1E3] text-[#A87F5F] border-[#E8D5C4]' },
+  done: { label: '已完成', color: 'bg-[#EEF1EB] text-[#4A5E48] border-[#C4D4BE]' },
+  returned: { label: '已归还', color: 'bg-[#E8F0FE] text-[#4A7BD9] border-[#C4D8F5]' },
 };
 
 function StatusBadge({ status }: { status: string }) {
-  const s = STATUS_MAP[status] || { label: status, color: 'bg-gray-100 text-gray-600' };
-  return <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${s.color}`}>{s.label}</span>;
+  const s = STATUS_MAP[status] || { label: status, color: 'bg-gray-100 text-gray-600 border-gray-200' };
+  return <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${s.color}`}>{s.label}</span>;
 }
 
 // ============ 主组件 ============
@@ -58,26 +81,27 @@ export default function HR() {
   const [showDialog, setShowDialog] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const user = storage.get('user') ? JSON.parse(storage.get('user')!) : null;
-  const isBoss = (user?.roles || []).includes('BOSS');
+  const roles: string[] = user?.roles || [];
+  const canEdit = roles.includes('BOSS') || roles.includes('经理') || roles.includes('HR经理');
   const token = storage.get('token') || '';
   const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
 
-  // 各模块数据
   const [recruits, setRecruits] = useState<Recruitment[]>([]);
   const [resigns, setResigns] = useState<Resignation[]>([]);
   const [attendances, setAttendances] = useState<Attendance[]>([]);
   const [assets, setAssets] = useState<CompanyAsset[]>([]);
   const [phones, setPhones] = useState<PhoneTransfer[]>([]);
-
-  // 表单状态
   const [form, setForm] = useState<Record<string, any>>({});
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [previewImage, setPreviewImage] = useState('');
 
   const tabs = [
-    { key: 'recruit' as const, label: '员工招聘', icon: '👥' },
-    { key: 'resign' as const, label: '员工离职', icon: '🚪' },
-    { key: 'attendance' as const, label: '员工考勤', icon: '📅' },
-    { key: 'asset' as const, label: '公司资产', icon: '🏢' },
-    { key: 'phone' as const, label: '手机流转', icon: '📱' },
+    { key: 'recruit' as const, label: '招聘', icon: '👥', count: recruits.length },
+    { key: 'resign' as const, label: '离职', icon: '🚪', count: resigns.length },
+    { key: 'attendance' as const, label: '考勤', icon: '📅', count: attendances.length },
+    { key: 'asset' as const, label: '资产', icon: '🏢', count: assets.length },
+    { key: 'phone' as const, label: '手机流转', icon: '📱', count: phones.length },
   ];
 
   useEffect(() => { loadData(); }, [tab]);
@@ -121,6 +145,57 @@ export default function HR() {
   const openAdd = () => { setEditId(null); setForm({}); setShowDialog(true); };
   const openEdit = (item: any) => { setEditId(item.id); setForm({ ...item }); setShowDialog(true); };
 
+  // 统计数据
+  const stats = useMemo(() => {
+    switch (tab) {
+      case 'recruit':
+        return [
+          { label: '全部应聘', value: recruits.length, color: 'from-[#8C6A53] to-[#7A5C48]' },
+          { label: '待处理', value: recruits.filter(r => r.status === 'pending').length, color: 'from-[#A87F5F] to-[#967055]' },
+          { label: '面试中', value: recruits.filter(r => r.status === 'interview').length, color: 'from-[#5C7A9E] to-[#4A6A8E]' },
+          { label: '已录用', value: recruits.filter(r => r.status === 'hired').length, color: 'from-[#5C7258] to-[#4A5E48]' },
+        ];
+      case 'resign':
+        return [
+          { label: '离职人数', value: resigns.length, color: 'from-[#8C6A53] to-[#7A5C48]' },
+          { label: '本月离职', value: resigns.filter(r => r.leaveDate?.startsWith(new Date().toISOString().slice(0, 7))).length, color: 'from-[#A87F5F] to-[#967055]' },
+          { label: '已完成交接', value: resigns.filter(r => r.handoverStatus?.includes('完成')).length, color: 'from-[#5C7258] to-[#4A5E48]' },
+          { label: '待交接', value: resigns.filter(r => !r.handoverStatus?.includes('完成')).length, color: 'from-[#B85C4A] to-[#9A4C3A]' },
+        ];
+      case 'attendance':
+        return [
+          { label: '记录数', value: attendances.length, color: 'from-[#8C6A53] to-[#7A5C48]' },
+          { label: '正常', value: attendances.filter(a => a.status === 'normal').length, color: 'from-[#5C7258] to-[#4A5E48]' },
+          { label: '迟到/早退', value: attendances.filter(a => a.status === 'late' || a.status === 'early').length, color: 'from-[#A87F5F] to-[#967055]' },
+          { label: '缺勤', value: attendances.filter(a => a.status === 'absent').length, color: 'from-[#B85C4A] to-[#9A4C3A]' },
+        ];
+      case 'asset':
+        return [
+          { label: '资产总数', value: assets.length, color: 'from-[#8C6A53] to-[#7A5C48]' },
+          { label: '正常', value: assets.filter(a => a.status === 'good').length, color: 'from-[#5C7258] to-[#4A5E48]' },
+          { label: '维修中', value: assets.filter(a => a.status === 'repairing').length, color: 'from-[#A87F5F] to-[#967055]' },
+          { label: '报废', value: assets.filter(a => a.status === 'scrapped').length, color: 'from-[#B85C4A] to-[#9A4C3A]' },
+        ];
+      case 'phone':
+        return [
+          { label: '流转记录', value: phones.length, color: 'from-[#8C6A53] to-[#7A5C48]' },
+          { label: '移交', value: phones.filter(p => p.transferType === 'handover').length, color: 'from-[#5C7A9E] to-[#4A6A8E]' },
+          { label: '借用', value: phones.filter(p => p.transferType === 'borrow').length, color: 'from-[#A87F5F] to-[#967055]' },
+          { label: '已归还', value: phones.filter(p => p.status === 'returned').length, color: 'from-[#5C7258] to-[#4A5E48]' },
+        ];
+      default: return [];
+    }
+  }, [tab, recruits, resigns, attendances, assets, phones]);
+
+  // 搜索过滤
+  const filterData = <T extends Record<string, any>>(data: T[]): T[] => {
+    return data.filter(item => {
+      const matchesSearch = !search || Object.values(item).some(v => String(v).toLowerCase().includes(search.toLowerCase()));
+      const matchesStatus = !filterStatus || item.status === filterStatus;
+      return matchesSearch && matchesStatus;
+    });
+  };
+
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#FAF5F0' }}>
       {/* Header */}
@@ -133,303 +208,368 @@ export default function HR() {
             <span className="font-semibold text-sm sm:text-base" style={{ color: '#4A3A2F' }}>人力资源</span>
           </div>
           <div className="flex items-center gap-2">
-            {isBoss && (
-              <Button size="sm" onClick={openAdd} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F] text-xs h-8">+ 新增</Button>
-            )}
+            <Button size="sm" onClick={openAdd} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F] text-xs h-8">+ 新增</Button>
             <Button variant="outline" size="sm" onClick={() => navigate('/portal')} className="text-xs h-8" style={{ color: '#726255', borderColor: '#E8DFD2' }}>返回</Button>
           </div>
         </div>
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
-        {/* Tab */}
-        <div className="flex border-b mb-4 overflow-x-auto" style={{ borderColor: '#E8DFD2' }}>
-          {tabs.map(t => (
-            <button key={t.key} onClick={() => setTab(t.key)}
-              className={`shrink-0 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${tab === t.key ? 'text-[#C89F7F] border-[#C89F7F]' : 'text-[#A08F80] border-transparent'}`}>
-              {t.icon} {t.label}
-            </button>
+        {/* 统计卡片 */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          {stats.map((s, i) => (
+            <div key={i} className="rounded-xl p-3 sm:p-4 text-white shadow-sm" style={{ background: `linear-gradient(135deg, ${s.color.includes('8C6A53') ? '#C89F7F, #B08D6F' : s.color.includes('5C7258') ? '#8C9E7A, #7A8E6A' : s.color.includes('5C7A9E') ? '#7A9EC0, #6A8EB0' : s.color.includes('B85C4A') ? '#C07A6A, #B06A5A' : '#A09080, #908070'})` }}>
+              <p className="text-2xl sm:text-3xl font-bold">{s.value}</p>
+              <p className="text-xs opacity-90 mt-0.5">{s.label}</p>
+            </div>
           ))}
+        </div>
+
+        {/* Tab + 搜索 */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div className="flex border-b overflow-x-auto" style={{ borderColor: '#E8DFD2' }}>
+            {tabs.map(t => (
+              <button key={t.key} onClick={() => { setTab(t.key); setSearch(''); setFilterStatus(''); }}
+                className={`shrink-0 px-3 sm:px-4 py-3 text-sm font-medium transition-colors border-b-2 whitespace-nowrap ${tab === t.key ? 'text-[#C89F7F] border-[#C89F7F]' : 'text-[#A08F80] border-transparent hover:text-[#726255]'}`}>
+                {t.icon} {t.label} <span className={`ml-1 text-xs px-1.5 py-0.5 rounded-full ${tab === t.key ? 'bg-[#C89F7F] text-white' : 'bg-[#E8DFD2] text-[#726255]'}`}>{t.count}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input type="text" placeholder="搜索..." value={search} onChange={e => setSearch(e.target.value)}
+              className="h-9 px-3 rounded-lg border border-[#E8DFD2] text-sm bg-white w-40" />
+            {tab !== 'phone' && (
+              <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+                className="h-9 px-2 rounded-lg border border-[#E8DFD2] text-sm bg-white">
+                <option value="">全部状态</option>
+                {tab === 'recruit' && <><option value="pending">待处理</option><option value="interview">面试中</option><option value="hired">已录用</option><option value="rejected">已拒绝</option></>}
+                {tab === 'attendance' && <><option value="normal">正常</option><option value="late">迟到</option><option value="early">早退</option><option value="absent">缺勤</option><option value="leave">请假</option></>}
+                {tab === 'asset' && <><option value="good">正常</option><option value="repairing">维修中</option><option value="scrapped">报废</option></>}
+              </select>
+            )}
+            {tab === 'phone' && (
+              <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+                className="h-9 px-2 rounded-lg border border-[#E8DFD2] text-sm bg-white">
+                <option value="">全部</option>
+                <option value="handover">移交</option>
+                <option value="borrow">借用</option>
+                <option value="return">归还</option>
+                <option value="pending">待处理</option>
+                <option value="done">已完成</option>
+                <option value="returned">已归还</option>
+              </select>
+            )}
+          </div>
         </div>
 
         {/* ===== 员工招聘 ===== */}
         {tab === 'recruit' && (
-          <DataTable
-            columns={['姓名', '性别', '年龄', '应聘岗位', '来源', '状态', '操作']}
-            data={recruits}
-            renderRow={r => (
+          <DataTable data={filterData(recruits)} columns={['姓名', '性别', '应聘岗位', '状态', '操作']}>
+            {r => (
               <>
-                <td className="px-3 py-3 font-medium">{r.name}</td>
-                <td className="px-3 py-3">{r.gender}</td>
-                <td className="px-3 py-3">{r.age}</td>
-                <td className="px-3 py-3">{r.position}</td>
-                <td className="px-3 py-3">{r.source}</td>
-                <td className="px-3 py-3"><StatusBadge status={r.status} /></td>
-                <td className="px-3 py-3 text-center">
-                  {isBoss && <>
-                    <button onClick={() => openEdit(r)} className="text-xs text-[#C89F7F] mr-2">编辑</button>
-                    <button onClick={() => handleDelete(r.id)} className="text-xs text-[#B85C4A]">删除</button>
-                  </>}
+                <td className="px-4 py-3">
+                  <div className="font-medium text-[#4A3A2F]">{r.name}</div>
+                  <div className="text-xs text-[#A08F80]">{r.age}岁 | {r.phone}</div>
+                  {(r.idCardFront || r.idCardBack) && (
+                    <div className="flex gap-1 mt-1">
+                      {r.idCardFront && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#E8F0FE] text-[#4A7BD9] cursor-pointer" onClick={(e) => { e.stopPropagation(); setPreviewImage(r.idCardFront!); }}>正面</span>}
+                      {r.idCardBack && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#E8F0FE] text-[#4A7BD9] cursor-pointer" onClick={(e) => { e.stopPropagation(); setPreviewImage(r.idCardBack!); }}>反面</span>}
+                    </div>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-[#726255]">{r.gender}</td>
+                <td className="px-4 py-3 text-[#726255]">{r.position} <span className="text-xs text-[#A08F80]">| {r.source}</span></td>
+                <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
+                <td className="px-4 py-3 text-center">
+                  {canEdit && <div className="flex items-center gap-2 justify-center"><button onClick={() => openEdit(r)} className="text-xs text-[#C89F7F] hover:text-[#7A5C48]">编辑</button><button onClick={() => handleDelete(r.id)} className="text-xs text-[#B85C4A] hover:text-[#8C3F30]">删除</button></div>}
                 </td>
               </>
             )}
-            mobileCard={r => (
-              <div className="p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-medium">{r.name} · {r.gender} · {r.age}岁</span>
-                  <StatusBadge status={r.status} />
-                </div>
-                <div className="text-xs text-[#A08F80]">岗位: {r.position} | 来源: {r.source}</div>
-                <div className="text-xs text-[#A08F80]">手机: {r.phone}</div>
-              </div>
-            )}
-          />
+          </DataTable>
         )}
 
         {/* ===== 员工离职 ===== */}
         {tab === 'resign' && (
-          <DataTable
-            columns={['姓名', '岗位', '入职日期', '离职日期', '离职原因', '交接状态', '操作']}
-            data={resigns}
-            renderRow={r => (
+          <DataTable data={filterData(resigns)} columns={['员工', '岗位', '入职→离职', '离职原因', '操作']}>
+            {r => (
               <>
-                <td className="px-3 py-3 font-medium">{r.staffName}</td>
-                <td className="px-3 py-3">{r.position}</td>
-                <td className="px-3 py-3">{r.joinDate}</td>
-                <td className="px-3 py-3">{r.leaveDate}</td>
-                <td className="px-3 py-3">{r.reason}</td>
-                <td className="px-3 py-3">{r.handoverStatus}</td>
-                <td className="px-3 py-3 text-center">
-                  {isBoss && <>
-                    <button onClick={() => openEdit(r)} className="text-xs text-[#C89F7F] mr-2">编辑</button>
-                    <button onClick={() => handleDelete(r.id)} className="text-xs text-[#B85C4A]">删除</button>
-                  </>}
-                </td>
+                <td className="px-4 py-3"><div className="font-medium text-[#4A3A2F]">{r.staffName}</div></td>
+                <td className="px-4 py-3 text-[#726255]">{r.position}</td>
+                <td className="px-4 py-3"><div className="text-sm text-[#726255]">{r.joinDate}</div><div className="text-sm text-[#B85C4A]">↓ {r.leaveDate}</div></td>
+                <td className="px-4 py-3"><div className="text-sm text-[#726255]">{r.reason}</div><div className="text-xs text-[#A08F80] mt-0.5">交接: {r.handoverStatus}</div></td>
+                <td className="px-4 py-3 text-center">{canEdit && <div className="flex items-center gap-2 justify-center"><button onClick={() => openEdit(r)} className="text-xs text-[#C89F7F] hover:text-[#7A5C48]">编辑</button><button onClick={() => handleDelete(r.id)} className="text-xs text-[#B85C4A] hover:text-[#8C3F30]">删除</button></div>}</td>
               </>
             )}
-            mobileCard={r => (
-              <div className="p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-medium">{r.staffName}</span>
-                  <span className="text-xs text-[#A08F80]">{r.position}</span>
-                </div>
-                <div className="text-xs text-[#A08F80]">入职: {r.joinDate} → 离职: {r.leaveDate}</div>
-                <div className="text-xs text-[#A08F80]">原因: {r.reason}</div>
-              </div>
-            )}
-          />
+          </DataTable>
         )}
 
         {/* ===== 员工考勤 ===== */}
         {tab === 'attendance' && (
-          <DataTable
-            columns={['姓名', '日期', '上班', '下班', '状态', '备注', '操作']}
-            data={attendances}
-            renderRow={r => (
+          <DataTable data={filterData(attendances)} columns={['姓名', '日期', '上下班', '状态', '操作']}>
+            {r => (
               <>
-                <td className="px-3 py-3 font-medium">{r.staffName}</td>
-                <td className="px-3 py-3">{r.date}</td>
-                <td className="px-3 py-3">{r.checkIn}</td>
-                <td className="px-3 py-3">{r.checkOut}</td>
-                <td className="px-3 py-3"><StatusBadge status={r.status} /></td>
-                <td className="px-3 py-3">{r.notes}</td>
-                <td className="px-3 py-3 text-center">
-                  {isBoss && <>
-                    <button onClick={() => openEdit(r)} className="text-xs text-[#C89F7F] mr-2">编辑</button>
-                    <button onClick={() => handleDelete(r.id)} className="text-xs text-[#B85C4A]">删除</button>
-                  </>}
-                </td>
+                <td className="px-4 py-3"><div className="font-medium text-[#4A3A2F]">{r.staffName}</div></td>
+                <td className="px-4 py-3 text-[#726255]">{r.date}</td>
+                <td className="px-4 py-3"><div className="text-sm text-[#726255]">{r.checkIn || '-'} → {r.checkOut || '-'}</div></td>
+                <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
+                <td className="px-4 py-3 text-center">{canEdit && <div className="flex items-center gap-2 justify-center"><button onClick={() => openEdit(r)} className="text-xs text-[#C89F7F] hover:text-[#7A5C48]">编辑</button><button onClick={() => handleDelete(r.id)} className="text-xs text-[#B85C4A] hover:text-[#8C3F30]">删除</button></div>}</td>
               </>
             )}
-            mobileCard={r => (
-              <div className="p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-medium">{r.staffName}</span>
-                  <StatusBadge status={r.status} />
-                </div>
-                <div className="text-xs text-[#A08F80]">{r.date} | 上班: {r.checkIn} 下班: {r.checkOut}</div>
-              </div>
-            )}
-          />
+          </DataTable>
         )}
 
         {/* ===== 公司资产 ===== */}
         {tab === 'asset' && (
-          <DataTable
-            columns={['资产名称', '类别', '数量', '位置', '状态', '价值', '操作']}
-            data={assets}
-            renderRow={r => (
+          <DataTable data={filterData(assets)} columns={['资产名称', '类别/数量', '位置', '状态', '操作']}>
+            {r => (
               <>
-                <td className="px-3 py-3 font-medium">{r.name}</td>
-                <td className="px-3 py-3">{r.category}</td>
-                <td className="px-3 py-3">{r.quantity}</td>
-                <td className="px-3 py-3">{r.location}</td>
-                <td className="px-3 py-3"><StatusBadge status={r.status} /></td>
-                <td className="px-3 py-3">{r.value ? `¥${r.value}` : '-'}</td>
-                <td className="px-3 py-3 text-center">
-                  {isBoss && <>
-                    <button onClick={() => openEdit(r)} className="text-xs text-[#C89F7F] mr-2">编辑</button>
-                    <button onClick={() => handleDelete(r.id)} className="text-xs text-[#B85C4A]">删除</button>
-                  </>}
-                </td>
+                <td className="px-4 py-3"><div className="font-medium text-[#4A3A2F]">{r.name}</div><div className="text-xs text-[#A08F80]">{r.purchaseDate} {r.value ? `| ¥${r.value}` : ''}</div></td>
+                <td className="px-4 py-3 text-[#726255]">{r.category} <span className="text-xs text-[#A08F80]">x{r.quantity}</span></td>
+                <td className="px-4 py-3 text-[#726255]">{r.location}</td>
+                <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
+                <td className="px-4 py-3 text-center">{canEdit && <div className="flex items-center gap-2 justify-center"><button onClick={() => openEdit(r)} className="text-xs text-[#C89F7F] hover:text-[#7A5C48]">编辑</button><button onClick={() => handleDelete(r.id)} className="text-xs text-[#B85C4A] hover:text-[#8C3F30]">删除</button></div>}</td>
               </>
             )}
-            mobileCard={r => (
-              <div className="p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-medium">{r.name}</span>
-                  <StatusBadge status={r.status} />
-                </div>
-                <div className="text-xs text-[#A08F80]">{r.category} | 数量: {r.quantity} | 位置: {r.location}</div>
-              </div>
-            )}
-          />
+          </DataTable>
         )}
 
         {/* ===== 手机流转 ===== */}
         {tab === 'phone' && (
-          <DataTable
-            columns={['手机号', '移交人', '接收人', '交接日期', '微信绑定', '操作']}
-            data={phones}
-            renderRow={r => (
+          <DataTable data={filterData(phones)} columns={['设备信息', '流转方式', '交接人', '状态', '操作']}>
+            {r => (
               <>
-                <td className="px-3 py-3 font-medium">{r.phoneNumber}</td>
-                <td className="px-3 py-3">{r.fromStaff}</td>
-                <td className="px-3 py-3">{r.toStaff}</td>
-                <td className="px-3 py-3">{r.transferDate}</td>
-                <td className="px-3 py-3">{r.wechatBind}</td>
-                <td className="px-3 py-3 text-center">
-                  {isBoss && <>
-                    <button onClick={() => openEdit(r)} className="text-xs text-[#C89F7F] mr-2">编辑</button>
-                    <button onClick={() => handleDelete(r.id)} className="text-xs text-[#B85C4A]">删除</button>
-                  </>}
+                <td className="px-4 py-3">
+                  <div className="font-medium text-[#4A3A2F]">{r.phoneNumber}</div>
+                  <div className="text-xs text-[#A08F80]">{r.deviceModel} | IMEI: {r.imei?.slice(-6) || '-'}</div>
+                  <div className="text-xs text-[#A08F80]">SIM: {r.simNumber || '-'}</div>
                 </td>
+                <td className="px-4 py-3">
+                  <StatusBadge status={r.transferType} />
+                  <div className="text-xs text-[#A08F80] mt-1">{r.transferDate}</div>
+                </td>
+                <td className="px-4 py-3">
+                  <div className="text-sm text-[#726255]">{r.fromStaff} → {r.toStaff}</div>
+                  <div className="text-xs text-[#A08F80]">微信: <StatusBadge status={r.wechatBind} /></div>
+                </td>
+                <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
+                <td className="px-4 py-3 text-center">{canEdit && <div className="flex items-center gap-2 justify-center"><button onClick={() => openEdit(r)} className="text-xs text-[#C89F7F] hover:text-[#7A5C48]">编辑</button><button onClick={() => handleDelete(r.id)} className="text-xs text-[#B85C4A] hover:text-[#8C3F30]">删除</button></div>}</td>
               </>
             )}
-            mobileCard={r => (
-              <div className="p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-medium">{r.phoneNumber}</span>
-                  <span className="text-xs text-[#A08F80]">{r.transferDate}</span>
-                </div>
-                <div className="text-xs text-[#A08F80]">{r.fromStaff} → {r.toStaff} | 微信: {r.wechatBind}</div>
-              </div>
-            )}
-          />
+          </DataTable>
         )}
       </div>
 
       {/* 弹窗 */}
       {showDialog && (
         <div className="fixed inset-0 bg-[#4A3A2F]/40 flex items-center justify-center z-50" onMouseDown={() => setShowDialog(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 p-5 max-h-[80vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">
-              {editId ? '编辑' : '新增'}{tabs.find(t => t.key === tab)?.label}
-            </h3>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 p-5 max-h-[85vh] overflow-y-auto" onMouseDown={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold text-[#4A3A2F] mb-4">{editId ? '编辑' : '新增'}{tabs.find(t => t.key === tab)?.label}</h3>
             <div className="space-y-3">
+
+              {/* ===== 招聘表单 ===== */}
               {tab === 'recruit' && <>
-                <div className="grid grid-cols-2 gap-2">
-                  <input placeholder="姓名*" value={form.name || ''} onChange={e => setForm({ ...form, name: e.target.value })} className="px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                  <input placeholder="年龄" type="number" value={form.age || ''} onChange={e => setForm({ ...form, age: parseInt(e.target.value) || 0 })} className="px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="姓名*"><input value={form.name || ''} onChange={e => setForm({ ...form, name: e.target.value })} className="form-input" placeholder="应聘者姓名" /></FormField>
+                  <FormField label="年龄"><input type="number" value={form.age || ''} onChange={e => setForm({ ...form, age: parseInt(e.target.value) || 0 })} className="form-input" placeholder="年龄" /></FormField>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <select value={form.gender || ''} onChange={e => setForm({ ...form, gender: e.target.value })} className="px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm">
-                    <option value="">性别</option><option value="男">男</option><option value="女">女</option>
-                  </select>
-                  <input placeholder="手机号" value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value })} className="px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="性别"><select value={form.gender || ''} onChange={e => setForm({ ...form, gender: e.target.value })} className="form-input"><option value="">请选择</option><option value="男">男</option><option value="女">女</option></select></FormField>
+                  <FormField label="手机号"><input value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value })} className="form-input" placeholder="联系电话" /></FormField>
                 </div>
-                <input placeholder="应聘岗位*" value={form.position || ''} onChange={e => setForm({ ...form, position: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input placeholder="来源（如BOSS直聘/58同城）" value={form.source || ''} onChange={e => setForm({ ...form, source: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <select value={form.status || 'pending'} onChange={e => setForm({ ...form, status: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm">
-                  <option value="pending">待处理</option><option value="interview">面试中</option><option value="hired">已录用</option><option value="rejected">已拒绝</option>
-                </select>
-                <input placeholder="备注" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
+                <FormField label="应聘岗位*"><input value={form.position || ''} onChange={e => setForm({ ...form, position: e.target.value })} className="form-input" placeholder="如：客服、派单侠" /></FormField>
+                <FormField label="招聘渠道"><input value={form.source || ''} onChange={e => setForm({ ...form, source: e.target.value })} className="form-input" placeholder="如：BOSS直聘、58同城" /></FormField>
+                <FormField label="应聘状态"><select value={form.status || 'pending'} onChange={e => setForm({ ...form, status: e.target.value })} className="form-input"><option value="pending">待处理</option><option value="interview">面试中</option><option value="hired">已录用</option><option value="rejected">已拒绝</option></select></FormField>
+
+                {/* 身份证图片上传 */}
+                <div className="bg-[#FAF5F0] rounded-lg p-3 space-y-3">
+                  <p className="text-xs font-medium text-[#726255] uppercase tracking-wider">📷 身份证件</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs text-[#726255] block mb-1">身份证正面</label>
+                      <PhotoUploader onUpload={(url) => setForm({ ...form, idCardFront: url })} existingUrl={form.idCardFront || ''} />
+                    </div>
+                    <div>
+                      <label className="text-xs text-[#726255] block mb-1">身份证反面</label>
+                      <PhotoUploader onUpload={(url) => setForm({ ...form, idCardBack: url })} existingUrl={form.idCardBack || ''} />
+                    </div>
+                  </div>
+                </div>
+
+                <FormField label="备注"><textarea value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} className="form-input resize-none" rows={2} placeholder="其他备注信息" /></FormField>
               </>}
+
+              {/* ===== 离职表单 ===== */}
               {tab === 'resign' && <>
-                <input placeholder="员工姓名*" value={form.staffName || ''} onChange={e => setForm({ ...form, staffName: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input placeholder="岗位" value={form.position || ''} onChange={e => setForm({ ...form, position: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="date" placeholder="入职日期" value={form.joinDate || ''} onChange={e => setForm({ ...form, joinDate: e.target.value })} className="px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                  <input type="date" placeholder="离职日期" value={form.leaveDate || ''} onChange={e => setForm({ ...form, leaveDate: e.target.value })} className="px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
+                <FormField label="员工姓名*"><input value={form.staffName || ''} onChange={e => setForm({ ...form, staffName: e.target.value })} className="form-input" placeholder="离职员工姓名" /></FormField>
+                <FormField label="岗位"><input value={form.position || ''} onChange={e => setForm({ ...form, position: e.target.value })} className="form-input" placeholder="担任岗位" /></FormField>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="入职日期"><input type="date" value={form.joinDate || ''} onChange={e => setForm({ ...form, joinDate: e.target.value })} className="form-input" /></FormField>
+                  <FormField label="离职日期*"><input type="date" value={form.leaveDate || ''} onChange={e => setForm({ ...form, leaveDate: e.target.value })} className="form-input" /></FormField>
                 </div>
-                <input placeholder="离职原因" value={form.reason || ''} onChange={e => setForm({ ...form, reason: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input placeholder="交接状态" value={form.handoverStatus || ''} onChange={e => setForm({ ...form, handoverStatus: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input placeholder="备注" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
+                <FormField label="离职原因*"><textarea value={form.reason || ''} onChange={e => setForm({ ...form, reason: e.target.value })} className="form-input resize-none" rows={2} placeholder="请填写离职原因" /></FormField>
+                <FormField label="交接状态"><select value={form.handoverStatus || ''} onChange={e => setForm({ ...form, handoverStatus: e.target.value })} className="form-input"><option value="">请选择</option><option value="待交接">待交接</option><option value="交接中">交接中</option><option value="已交接完成">已交接完成</option><option value="无需交接">无需交接</option></select></FormField>
+                <FormField label="备注"><textarea value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} className="form-input resize-none" rows={2} placeholder="其他备注" /></FormField>
               </>}
+
+              {/* ===== 考勤表单 ===== */}
               {tab === 'attendance' && <>
-                <input placeholder="员工姓名*" value={form.staffName || ''} onChange={e => setForm({ ...form, staffName: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input type="date" value={form.date || ''} onChange={e => setForm({ ...form, date: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="time" placeholder="上班时间" value={form.checkIn || ''} onChange={e => setForm({ ...form, checkIn: e.target.value })} className="px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                  <input type="time" placeholder="下班时间" value={form.checkOut || ''} onChange={e => setForm({ ...form, checkOut: e.target.value })} className="px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
+                <FormField label="员工姓名*"><input value={form.staffName || ''} onChange={e => setForm({ ...form, staffName: e.target.value })} className="form-input" placeholder="考勤员工姓名" /></FormField>
+                <FormField label="考勤日期*"><input type="date" value={form.date || ''} onChange={e => setForm({ ...form, date: e.target.value })} className="form-input" /></FormField>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="上班时间"><input type="time" value={form.checkIn || ''} onChange={e => setForm({ ...form, checkIn: e.target.value })} className="form-input" /></FormField>
+                  <FormField label="下班时间"><input type="time" value={form.checkOut || ''} onChange={e => setForm({ ...form, checkOut: e.target.value })} className="form-input" /></FormField>
                 </div>
-                <select value={form.status || 'normal'} onChange={e => setForm({ ...form, status: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm">
-                  <option value="normal">正常</option><option value="late">迟到</option><option value="early">早退</option><option value="absent">缺勤</option><option value="leave">请假</option>
-                </select>
-                <input placeholder="备注" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
+                <FormField label="考勤状态"><select value={form.status || 'normal'} onChange={e => setForm({ ...form, status: e.target.value })} className="form-input"><option value="normal">正常</option><option value="late">迟到</option><option value="early">早退</option><option value="absent">缺勤</option><option value="leave">请假</option></select></FormField>
+                <FormField label="备注"><textarea value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} className="form-input resize-none" rows={2} placeholder="备注信息" /></FormField>
               </>}
+
+              {/* ===== 资产表单 ===== */}
               {tab === 'asset' && <>
-                <input placeholder="资产名称*" value={form.name || ''} onChange={e => setForm({ ...form, name: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input placeholder="类别" value={form.category || ''} onChange={e => setForm({ ...form, category: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="number" placeholder="数量" value={form.quantity || ''} onChange={e => setForm({ ...form, quantity: parseInt(e.target.value) || 0 })} className="px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                  <input type="number" placeholder="价值(元)" value={form.value || ''} onChange={e => setForm({ ...form, value: parseFloat(e.target.value) || 0 })} className="px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
+                <FormField label="资产名称*"><input value={form.name || ''} onChange={e => setForm({ ...form, name: e.target.value })} className="form-input" placeholder="如：办公桌椅、电脑" /></FormField>
+                <FormField label="资产类别"><input value={form.category || ''} onChange={e => setForm({ ...form, category: e.target.value })} className="form-input" placeholder="如：办公设备、电子设备" /></FormField>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="数量"><input type="number" value={form.quantity || ''} onChange={e => setForm({ ...form, quantity: parseInt(e.target.value) || 0 })} className="form-input" placeholder="数量" /></FormField>
+                  <FormField label="价值(元)"><input type="number" value={form.value || ''} onChange={e => setForm({ ...form, value: parseFloat(e.target.value) || 0 })} className="form-input" placeholder="资产价值" /></FormField>
                 </div>
-                <input placeholder="存放位置" value={form.location || ''} onChange={e => setForm({ ...form, location: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <select value={form.status || 'good'} onChange={e => setForm({ ...form, status: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm">
-                  <option value="good">正常</option><option value="repairing">维修中</option><option value="scrapped">报废</option>
-                </select>
-                <input placeholder="备注" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
+                <FormField label="存放位置"><input value={form.location || ''} onChange={e => setForm({ ...form, location: e.target.value })} className="form-input" placeholder="如：办公室A区" /></FormField>
+                <FormField label="资产状态"><select value={form.status || 'good'} onChange={e => setForm({ ...form, status: e.target.value })} className="form-input"><option value="good">正常</option><option value="repairing">维修中</option><option value="scrapped">报废</option></select></FormField>
+                <FormField label="备注"><textarea value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} className="form-input resize-none" rows={2} placeholder="其他备注" /></FormField>
               </>}
+
+              {/* ===== 手机流转表单（优化版） ===== */}
               {tab === 'phone' && <>
-                <input placeholder="手机号*" value={form.phoneNumber || ''} onChange={e => setForm({ ...form, phoneNumber: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input placeholder="移交人" value={form.fromStaff || ''} onChange={e => setForm({ ...form, fromStaff: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input placeholder="接收人" value={form.toStaff || ''} onChange={e => setForm({ ...form, toStaff: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input type="date" placeholder="交接日期" value={form.transferDate || ''} onChange={e => setForm({ ...form, transferDate: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input placeholder="微信绑定情况" value={form.wechatBind || ''} onChange={e => setForm({ ...form, wechatBind: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
-                <input placeholder="备注" value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[#E8DFD2] text-sm" />
+                {/* 基本信息 */}
+                <div className="bg-[#FAF5F0] rounded-lg p-3 space-y-3">
+                  <p className="text-xs font-medium text-[#726255] uppercase tracking-wider">📱 设备信息</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField label="手机号*"><input value={form.phoneNumber || ''} onChange={e => setForm({ ...form, phoneNumber: e.target.value })} className="form-input" placeholder="工作手机号" /></FormField>
+                    <FormField label="SIM卡号"><input value={form.simNumber || ''} onChange={e => setForm({ ...form, simNumber: e.target.value })} className="form-input" placeholder="SIM卡号（可选）" /></FormField>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField label="设备型号*"><input value={form.deviceModel || ''} onChange={e => setForm({ ...form, deviceModel: e.target.value })} className="form-input" placeholder="如：iPhone 15 Pro" /></FormField>
+                    <FormField label="IMEI"><input value={form.imei || ''} onChange={e => setForm({ ...form, imei: e.target.value })} className="form-input" placeholder="设备IMEI码" /></FormField>
+                  </div>
+                </div>
+
+                {/* 流转信息 */}
+                <div className="bg-[#FAF5F0] rounded-lg p-3 space-y-3">
+                  <p className="text-xs font-medium text-[#726255] uppercase tracking-wider">🔄 流转信息</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField label="移交人*"><input value={form.fromStaff || ''} onChange={e => setForm({ ...form, fromStaff: e.target.value })} className="form-input" placeholder="原持有人" /></FormField>
+                    <FormField label="接收人*"><input value={form.toStaff || ''} onChange={e => setForm({ ...form, toStaff: e.target.value })} className="form-input" placeholder="新持有人" /></FormField>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField label="流转类型*"><select value={form.transferType || 'handover'} onChange={e => setForm({ ...form, transferType: e.target.value })} className="form-input"><option value="handover">永久移交</option><option value="borrow">临时借用</option><option value="return">归还公司</option></select></FormField>
+                    <FormField label="交接日期*"><input type="date" value={form.transferDate || ''} onChange={e => setForm({ ...form, transferDate: e.target.value })} className="form-input" /></FormField>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormField label="微信绑定状态"><select value={form.wechatBind || 'unbound'} onChange={e => setForm({ ...form, wechatBind: e.target.value })} className="form-input"><option value="bound">已绑定</option><option value="unbound">未绑定</option><option value="changed">已换绑</option></select></FormField>
+                    <FormField label="流转状态"><select value={form.status || 'done'} onChange={e => setForm({ ...form, status: e.target.value })} className="form-input"><option value="pending">待处理</option><option value="done">已完成</option><option value="returned">已归还</option></select></FormField>
+                  </div>
+                  {form.transferType === 'borrow' && (
+                    <FormField label="预计归还日期"><input type="date" value={form.returnDate || ''} onChange={e => setForm({ ...form, returnDate: e.target.value })} className="form-input" /></FormField>
+                  )}
+                </div>
+
+                {/* 设备状况 */}
+                <div className="bg-[#FAF5F0] rounded-lg p-3 space-y-3">
+                  <p className="text-xs font-medium text-[#726255] uppercase tracking-wider">📝 设备状况</p>
+                  <FormField label="设备外观/功能状况"><input value={form.condition || ''} onChange={e => setForm({ ...form, condition: e.target.value })} className="form-input" placeholder="如：外观完好、功能正常" /></FormField>
+                  <FormField label="配件清单"><input value={form.accessories || ''} onChange={e => setForm({ ...form, accessories: e.target.value })} className="form-input" placeholder="如：充电器、数据线、手机壳" /></FormField>
+                </div>
+
+                <FormField label="备注"><textarea value={form.notes || ''} onChange={e => setForm({ ...form, notes: e.target.value })} className="form-input resize-none" rows={2} placeholder="其他备注信息" /></FormField>
               </>}
             </div>
-            <div className="flex gap-2 mt-5">
+            <div className="flex gap-2 mt-5 pt-3 border-t border-[#E8DFD2]">
               <Button variant="outline" className="flex-1" onClick={() => setShowDialog(false)}>取消</Button>
               <Button className="flex-1 bg-[#C89F7F] text-white hover:bg-[#B88F6F]" onClick={handleSubmit}>保存</Button>
             </div>
           </div>
         </div>
       )}
+
+      {/* 图片预览弹窗 */}
+      {previewImage && (
+        <div className="fixed inset-0 bg-[#4A3A2F]/60 flex items-center justify-center z-50" onMouseDown={() => setPreviewImage('')}>
+          <div className="relative max-w-lg w-full mx-4" onMouseDown={e => e.stopPropagation()}>
+            <img src={previewImage} alt="预览" className="w-full rounded-xl shadow-2xl" />
+            <button onClick={() => setPreviewImage('')} className="absolute -top-3 -right-3 w-8 h-8 bg-white rounded-full shadow-lg flex items-center justify-center text-[#726255] hover:text-[#B85C4A]">✕</button>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        .form-input {
+          width: 100%;
+          padding: 0.5rem 0.75rem;
+          border-radius: 0.5rem;
+          border: 1px solid #E8DFD2;
+          font-size: 0.875rem;
+          background-color: white;
+          color: #4A3A2F;
+          outline: none;
+          transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .form-input:focus {
+          border-color: #C89F7F;
+          box-shadow: 0 0 0 2px rgba(200, 159, 127, 0.15);
+        }
+        .form-input::placeholder {
+          color: #A08F80;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ============ 表单字段包装 ============
+function FormField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="text-xs text-[#726255] font-medium mb-1 block">{label}</label>
+      {children}
     </div>
   );
 }
 
 // ============ 通用表格组件 ============
-function DataTable<T>({ columns, data, renderRow, mobileCard }: {
+function DataTable<T extends { id?: string }>({ columns, data, children }: {
   columns: string[]; data: T[];
-  renderRow: (item: T) => React.ReactNode;
-  mobileCard: (item: T) => React.ReactNode;
+  children: (item: T) => React.ReactNode;
 }) {
   return (
     <div className="rounded-xl border border-[#E8DFD2] bg-white shadow-sm overflow-hidden">
+      {/* 桌面端表格 */}
       <div className="hidden sm:block overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-[#FAF5F0] text-[#726255]">
-            <tr>{columns.map(c => <th key={c} className="px-3 py-3 text-left font-medium">{c}</th>)}</tr>
+          <thead>
+            <tr className="bg-[#FAF5F0]">
+              {columns.map(c => <th key={c} className="px-4 py-3 text-left text-xs font-medium text-[#726255] uppercase tracking-wider">{c}</th>)}
+            </tr>
           </thead>
           <tbody className="divide-y divide-[#F0E8DF]">
             {data.length === 0 ? (
-              <tr><td colSpan={columns.length} className="px-4 py-8 text-center text-[#A08F80]">暂无记录</td></tr>
+              <tr><td colSpan={columns.length} className="px-4 py-12 text-center text-[#A08F80]">暂无记录</td></tr>
             ) : data.map((item, i) => (
-              <tr key={i} className="hover:bg-[#FAF5F0]">{renderRow(item)}</tr>
+              <tr key={item.id || i} className="hover:bg-[#FAF5F0] transition-colors">{children(item)}</tr>
             ))}
           </tbody>
         </table>
       </div>
+      {/* 移动端卡片 */}
       <div className="sm:hidden divide-y divide-[#F0E8DF]">
         {data.length === 0 ? (
-          <div className="px-4 py-8 text-center text-[#A08F80] text-sm">暂无记录</div>
+          <div className="px-4 py-12 text-center text-[#A08F80] text-sm">暂无记录</div>
         ) : data.map((item, i) => (
-          <div key={i}>{mobileCard(item)}</div>
+          <MobileCard key={item.id || i}>{children(item)}</MobileCard>
         ))}
       </div>
     </div>
   );
+}
+
+// 移动端将表格行转为卡片
+function MobileCard({ children }: { children: React.ReactNode }) {
+  return <div className="p-4 text-sm">{children}</div>;
 }

@@ -41,6 +41,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
   try {
     const res = await fetch(url, options);
+    if (res.status === 401) {
+      // 未授权，清除登录状态并跳转登录页
+      storage.remove('token');
+      storage.remove('user');
+      window.location.href = '/';
+      throw new Error('登录已过期，请重新登录');
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new Error(text || `HTTP ${res.status}`);

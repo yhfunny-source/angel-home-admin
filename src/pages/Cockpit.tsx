@@ -18,10 +18,10 @@ export default function Cockpit() {
   const [detailView, setDetailView] = useState<'stores' | 'waiters' | 'staff' | null>(null);
   const [timeRange, setTimeRange] = useState<'today' | '7d' | '30d' | 'month' | 'year'>('today');
 
-  const load = async () => {
+  const load = async (range?: string) => {
     setLoading(true);
     try {
-      const res = await getCockpit(timeRange);
+      const res = await getCockpit(range || timeRange);
       setData(res);
     } catch (e: any) {
       toast.error('数据加载失败: ' + e.message);
@@ -30,11 +30,16 @@ export default function Cockpit() {
     }
   };
 
+  // 初始加载 + timeRange变化时自动重新加载
   useEffect(() => {
-    load();
-    const timer = setInterval(load, 30000);
+    load(timeRange);
+  }, [timeRange]);
+
+  // 自动刷新（30秒一次，用当前timeRange）
+  useEffect(() => {
+    const timer = setInterval(() => load(timeRange), 30000);
     return () => clearInterval(timer);
-  }, []);
+  }, [timeRange]);
 
   const user = storage.get('user') ? JSON.parse(storage.get('user')!) : null;
 
@@ -100,7 +105,7 @@ export default function Cockpit() {
               ].map(item => (
                 <button
                   key={item.key}
-                  onClick={() => { setTimeRange(item.key); setTimeout(load, 0); }}
+                  onClick={() => setTimeRange(item.key)}
                   className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                     timeRange === item.key
                       ? 'bg-[#C89F7F] text-white'

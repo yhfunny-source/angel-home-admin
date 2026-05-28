@@ -117,9 +117,19 @@ export default function SendOrder() {
     try {
       console.log('loadData: calling getOrders...');
       const [o, , s] = await Promise.all([
-        getOrders().catch((e) => { console.error('getOrders error:', e); return []; }),
-        getWaiters().catch(() => []),
-        getStores().catch(() => []),
+        getOrders().catch((e: any) => { 
+          if (e?.message?.includes('登录') || e?.message?.includes('401')) throw e;
+          console.error('getOrders error:', e); 
+          return []; 
+        }),
+        getWaiters().catch((e: any) => { 
+          if (e?.message?.includes('登录') || e?.message?.includes('401')) throw e;
+          return []; 
+        }),
+        getStores().catch((e: any) => { 
+          if (e?.message?.includes('登录') || e?.message?.includes('401')) throw e;
+          return []; 
+        }),
       ]);
       console.log('loadData: got orders:', o?.length, o?.slice(0, 1));
 

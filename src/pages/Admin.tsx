@@ -34,7 +34,8 @@ const roleColors: Record<string, string> = {
   '派单侠': 'bg-[#E5DCD0] text-[#6B4A38]',
 };
 
-const roleOrder: UserRole[] = ['BOSS', '经理', '数据督导', '客服', '派单侠'];
+// 默认角色顺序（实际从API动态获取）
+const defaultRoleOrder = ['BOSS', '经理', '数据督导', '客服', '派单侠'];
 
 export default function Admin() {
   const navigate = useNavigate();
@@ -58,7 +59,7 @@ export default function Admin() {
   const [bindStoreName, setBindStoreName] = useState('');
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [showRoleEdit, setShowRoleEdit] = useState(false);
-  const [editRoleUser, setEditRoleUser] = useState<User | null>(null);
+  const [editRoleUser, setEditRoleUser] = useState<any>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedBindStaffId, setSelectedBindStaffId] = useState('');
   const [detailStaff, setDetailStaff] = useState<Staff | null>(null);
@@ -74,7 +75,7 @@ export default function Admin() {
   const [rolePermissions, setRolePermissions] = useState<{roleName: string; modules: string[]}[]>([]);
 
   const currentUser = JSON.parse(storage.get('user') || '{}');
-  const isBoss = (currentUser?.roles || []).includes('BOSS');
+  const isAdmin = currentUser?.id === 'admin';
 
   const loadData = async () => {
     try {
@@ -250,10 +251,11 @@ export default function Admin() {
 
   const roleStats = useMemo(() => {
     const stats: Record<string, number> = {};
-    roleOrder.forEach(r => stats[r] = 0);
+    const roles = rolePermissions.length > 0 ? rolePermissions.map(rp => rp.roleName) : defaultRoleOrder;
+    roles.forEach(r => stats[r] = 0);
     users.forEach(u => (u.roles || []).forEach(r => { if (stats[r] !== undefined) stats[r]++; }));
     return stats;
-  }, [users]);
+  }, [users, rolePermissions]);
 
   // KPI cards data - 使用真实订单数据
   const completedOrders = orders.filter(o => o.status === 'completed' || o.status === 'rated');
@@ -392,10 +394,10 @@ export default function Admin() {
                   <div className="bg-[#FFFFFF] rounded-xl border border-[#E8DFD2] shadow-sm p-4 sm:p-5">
                     <h3 className="text-sm font-semibold text-[#4A3A2F] mb-3 sm:mb-4">角色分布</h3>
                     <div className="grid grid-cols-3 sm:flex sm:gap-4 gap-3">
-                      {roleOrder.map(role => (
+                      {(rolePermissions.length > 0 ? rolePermissions.map(rp => rp.roleName) : defaultRoleOrder).map(role => (
                           <div key={role} className="flex-1 text-center p-3 sm:p-4 rounded-lg bg-[#FAF5F0]">
                             <p className="text-xl sm:text-2xl font-bold text-[#4A3A2F]">{roleStats[role] || 0}</p>
-                            <Badge variant="outline" className={`mt-1 sm:mt-2 ${roleColors[role] || ''}`}>{role}</Badge>
+                            <Badge variant="outline" className={`mt-1 sm:mt-2 ${roleColors[role] || 'bg-[#E8DFD2] text-[#726255]'}`}>{role}</Badge>
                           </div>
                       ))}
                     </div>
@@ -453,7 +455,9 @@ export default function Admin() {
                                 )}
                               </td>
                               <td className="px-4 py-3 text-right">
-                                <button onClick={() => { setEditRoleUser(u); setShowRoleEdit(true); }} className="text-[#5C7258] hover:text-[#4A5E48] text-xs mr-3">🔑权限</button>
+                                {isAdmin && (
+                                  <button onClick={() => { setEditRoleUser(u); setShowRoleEdit(true); }} className="text-[#5C7258] hover:text-[#4A5E48] text-xs mr-3">🔑权限</button>
+                                )}
                                 <button onClick={() => openForm('user', u)} className="text-[#B88F6F] hover:text-[#7A5C48] text-xs mr-3">编辑</button>
                                 <button onClick={() => confirmDelete('user', u.id, u.name || u.username)} className="text-[#B85C4A] hover:text-[#8C3F30] text-xs">删除</button>
                               </td>
@@ -471,13 +475,15 @@ export default function Admin() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold text-[#4A3A2F]">角色权限</h2>
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={() => { setNewRoleName(''); setShowCreateRole(true); }} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F]">+ 新建用户组</Button>
-                      <Button size="sm" onClick={() => navigate('/role-permissions')} className="bg-[#726255] text-white hover:bg-[#5A4A3F]">🔐 配置模块权限</Button>
-                    </div>
+                    {isAdmin && (
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={() => { setNewRoleName(''); setShowCreateRole(true); }} className="bg-[#C89F7F] text-white hover:bg-[#B88F6F]">+ 新建用户组</Button>
+                        <Button size="sm" onClick={() => navigate('/role-permissions')} className="bg-[#726255] text-white hover:bg-[#5A4A3F]">🔐 配置模块权限</Button>
+                      </div>
+                    )}
                   </div>
                   <div className="grid grid-cols-1 gap-4">
-                    {(rolePermissions.length > 0 ? rolePermissions.map(rp => rp.roleName) : roleOrder).map((role: string) => {
+                    {(rolePermissions.length > 0 ? rolePermissions.map(rp => rp.roleName) : defaultRoleOrder).map((role: string) => {
                       const members = users.filter(u => (u.roles || []).includes(role as any));
                       const noMembers = members.length === 0;
                       const isProtected = role === 'BOSS';
@@ -491,7 +497,7 @@ export default function Admin() {
                               <span className="text-sm text-[#A08F80]">{members.length} 人</span>
                               <span className="text-xs text-[#A08F80]">{moduleCount} 个模块</span>
                             </div>
-                            {!isProtected && (
+                            {isAdmin && !isProtected && (
                               <button
                                 onClick={() => {
                                   if (confirm(`确定删除角色 "${role}"？\n\n${noMembers ? '该角色暂无成员。' : `该角色有 ${members.length} 个成员，删除后将从这些成员身上移除该角色。`}\n\n此操作不可撤销！`)) {
@@ -780,7 +786,7 @@ export default function Admin() {
                               <span className="text-sm text-[#726255]">预付金: ¥{order.prepayAmount}</span>
                             )}
                           </div>
-                          {isBoss && (
+                          {isAdmin && (
                             <div className="flex items-center gap-2 mt-2 pt-2 border-t border-[#E8DFD2]">
                               <button
                                 onClick={() => {
@@ -797,19 +803,21 @@ export default function Admin() {
                               >
                                 ✏️ 编辑
                               </button>
-                              <button
-                                onClick={() => {
-                                  if (confirm(`确定删除订单 #${order.orderNo || order.id?.slice(-6)} (${order.customerName || '匿名'})?\n\n此操作不可撤销！`)) {
-                                    deleteOrder(order.id).then(() => {
-                                      toast.success('订单已删除');
-                                      loadData();
-                                    }).catch((e: any) => toast.error('删除失败: ' + (e.message || '无权删除')));
-                                  }
-                                }}
-                                className="text-xs text-[#B85C4A] hover:text-[#8C3F30] hover:bg-[#F5DCD6] px-2 py-1 rounded transition-colors"
-                              >
-                                🗑️ 删除
-                              </button>
+                              {isAdmin && (
+                                <button
+                                  onClick={() => {
+                                    if (confirm(`确定删除订单 #${order.orderNo || order.id?.slice(-6)} (${order.customerName || '匿名'})?\n\n此操作不可撤销！`)) {
+                                      deleteOrder(order.id).then(() => {
+                                        toast.success('订单已删除');
+                                        loadData();
+                                      }).catch((e: any) => toast.error('删除失败: ' + (e.message || '无权删除')));
+                                    }
+                                  }}
+                                  className="text-xs text-[#B85C4A] hover:text-[#8C3F30] hover:bg-[#F5DCD6] px-2 py-1 rounded transition-colors"
+                                >
+                                  🗑️ 删除
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -1067,7 +1075,7 @@ export default function Admin() {
                     <div>
                       <label className="text-sm text-[#726255]">角色（可多选）</label>
                       <div className="flex flex-wrap gap-2 mt-1">
-                        {roleOrder.map(role => {
+                        {(rolePermissions.length > 0 ? rolePermissions.map(rp => rp.roleName) : defaultRoleOrder).map(role => {
                           const roles = formData.roles || [];
                           const isChecked = roles.includes(role);
                           return (
@@ -1277,16 +1285,16 @@ export default function Admin() {
             <h3 className="text-lg font-bold text-[#4A3A2F] mb-1">编辑用户权限</h3>
             <p className="text-xs text-[#A08F80] mb-4">用户: {editRoleUser.name || editRoleUser.username}</p>
             <div className="space-y-2 mb-5">
-              {(['BOSS', '经理', '数据督导', '派单侠', '客服'] as const).map(role => (
+              {(rolePermissions.length > 0 ? rolePermissions.map(rp => rp.roleName) : ['BOSS', '经理', '数据督导', '派单侠', '客服']).map(role => (
                 <label key={role} className="flex items-center gap-2 p-2 rounded-lg hover:bg-[#FAF5F0] cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={(editRoleUser.roles || []).includes(role as UserRole)}
+                    checked={(editRoleUser.roles || []).includes(role)}
                     onChange={(e) => {
                       const currentRoles = editRoleUser.roles || [];
                       const newRoles = e.target.checked
-                        ? [...currentRoles, role as UserRole]
-                        : currentRoles.filter(r => r !== role);
+                        ? [...currentRoles, role]
+                        : currentRoles.filter((r: string) => r !== role);
                       setEditRoleUser({ ...editRoleUser, roles: newRoles });
                     }}
                     className="w-4 h-4 accent-[#C89F7F]"

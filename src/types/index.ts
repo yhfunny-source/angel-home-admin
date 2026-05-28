@@ -241,6 +241,9 @@ export interface Customer {
   status: 'active' | 'inactive' | 'blacklist';
   createdAt?: string;
   updatedAt?: string;
+  // 关联的客服和服务员（从customer_services聚合）
+  relatedCs?: string[];
+  relatedWaiters?: string[];
 }
 
 export interface CustomerService {

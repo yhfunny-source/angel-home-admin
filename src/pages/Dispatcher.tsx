@@ -600,27 +600,36 @@ export default function Dispatcher() {
                   )}
                   {/* 历史服务过的服务员 - 避免重复派单 */}
                   {(customerHistory as any)?.services && ((customerHistory as any).services as CustomerService[]).length > 0 && (
-                    <div className="mt-2 p-2 bg-[#F5DCD6]/30 rounded border border-[#F5DCD6]">
-                      <p className="text-xs text-[#B85C4A] font-medium mb-1">⚠️ 历史服务过的服务员（请勿重复派单）</p>
-                      <div className="flex flex-wrap gap-1">
+                    <div className="mt-2 p-3 bg-gradient-to-r from-[#F5DCD6]/50 to-[#FDE8D8]/50 rounded-lg border-2 border-[#E8A090]">
+                      <p className="text-sm text-[#B85C4A] font-bold mb-2">⚠️ 历史服务过的服务员（请勿重复派单）</p>
+                      <div className="flex flex-wrap gap-2">
                         {(() => {
                           const services = (customerHistory as any).services as CustomerService[];
-                          const uniqueWaiters = new Map<string, { name: string; count: number; dates: string[] }>();
-                          services.forEach((svc: CustomerService) => {
-                            if (svc.waiterName) {
+                          // 按服务时间排序，最近的服务员排在前面
+                          const sortedServices = [...services].sort((a, b) => {
+                            const da = a.serviceDate || '';
+                            const db = b.serviceDate || '';
+                            return db.localeCompare(da);
+                          });
+                          const uniqueWaiters = new Map<string, { name: string; count: number; lastDate: string }>();
+                          sortedServices.forEach((svc: CustomerService) => {
+                            if (svc.waiterName && svc.waiterName !== '未分配') {
                               const key = svc.waiterName;
                               const existing = uniqueWaiters.get(key);
                               if (existing) {
                                 existing.count += 1;
-                                if (svc.serviceDate) existing.dates.push(svc.serviceDate);
                               } else {
-                                uniqueWaiters.set(key, { name: svc.waiterName, count: 1, dates: svc.serviceDate ? [svc.serviceDate] : [] });
+                                uniqueWaiters.set(key, { name: svc.waiterName, count: 1, lastDate: svc.serviceDate || '' });
                               }
                             }
                           });
-                          return Array.from(uniqueWaiters.values()).map(w => (
-                            <Badge key={w.name} variant="outline" className="text-xs bg-[#F5DCD6] text-[#8C3F30] border-[#E8A090]">
-                              🚫 {w.name} {w.count > 1 ? `(${w.count}次)` : ''}
+                          if (uniqueWaiters.size === 0) {
+                            return <span className="text-xs text-[#A08F80]">暂无服务员记录</span>;
+                          }
+                          return Array.from(uniqueWaiters.values()).map((w, idx) => (
+                            <Badge key={w.name} variant="outline" className={`text-sm font-bold px-3 py-1 ${idx === 0 ? 'bg-[#B85C4A] text-white border-[#B85C4A]' : 'bg-[#F5DCD6] text-[#8C3F30] border-[#E8A090]'}`}>
+                              {idx === 0 ? '👤 ' : '🚫 '}{w.name} {w.count > 1 ? `(${w.count}次)` : ''}
+                              {w.lastDate ? <span className="text-xs opacity-75 ml-1">{w.lastDate.slice(5)}</span> : ''}
                             </Badge>
                           ));
                         })()}
@@ -629,14 +638,15 @@ export default function Dispatcher() {
                   )}
                   {/* 历史消费明细 - 每次消费记录 */}
                   {(customerHistory as any)?.services && ((customerHistory as any).services as CustomerService[]).length > 0 && (
-                    <div className="mt-2 space-y-1.5 max-h-28 overflow-y-auto">
+                    <div className="mt-2 space-y-1.5 max-h-32 overflow-y-auto">
                       <p className="text-xs text-[#94724A] font-medium">📋 历史消费记录</p>
                       {((customerHistory as any).services as CustomerService[]).map((svc: CustomerService, idx: number) => (
                         <div key={svc.id || idx} className="flex items-center gap-2 text-xs p-1.5 bg-white/50 rounded">
                           <span className="text-[#A08F80] shrink-0">{svc.serviceDate?.slice(5) || '--'}</span>
                           <span className="text-[#4A3A2F] font-medium">👤{svc.csName || '-'}</span>
-                          <span className="text-[#A87F5F]">💁{svc.waiterName || '-'}</span>
+                          <span className="text-[#A87F5F] font-semibold">💁{svc.waiterName || '未分配'}</span>
                           <span className="text-[#C89F7F] font-semibold ml-auto">¥{svc.infoFee || 0}</span>
+                          {svc.rating > 0 && <span className="text-[#F59E0B]">{'★'.repeat(svc.rating)}</span>}
                         </div>
                       ))}
                     </div>
@@ -854,7 +864,7 @@ export default function Dispatcher() {
                 </div>
                 <div className="bg-[#FAF5F0] p-3 rounded-lg">
                   <div className="grid grid-cols-2 gap-2">
-                    <p><span className="text-[#A08F80]">客服:</span> {selectedOrder.staffName || '-'}</p>
+                    <p><span className="text-[#A08F80]">客服:</span> {selectedOrder.submittedBy || selectedOrder.staffName || '-'}</p>
                     <p><span className="text-[#A08F80]">派单侠:</span> {selectedOrder.dispatcherName || '-'}</p>
                     <p><span className="text-[#A08F80]">服务员:</span> {selectedOrder.waiterName || '-'}</p>
                     <p><span className="text-[#A08F80]">门店:</span> {selectedOrder.storeName || '-'}</p>
